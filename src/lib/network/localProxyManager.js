@@ -53,7 +53,7 @@ function toOutbound(node) {
 function render(config) {
   const outbounds = config.nodes.map(toOutbound).filter(Boolean);
   const selected = outbounds.find((outbound) => outbound.tag === config.selectedNodeId) || outbounds[0];
-  return JSON.stringify({ log: { level: "warn" }, inbounds: [{ type: "mixed", tag: "proxy-in", listen: "127.0.0.1", listen_port: config.port }], outbounds: [...outbounds, { type: "direct", tag: "direct" }], route: { final: selected.tag } }, null, 2) + "\n";
+  return JSON.stringify({ log: { level: "warn" }, dns: { strategy: "ipv4_only" }, inbounds: [{ type: "mixed", tag: "proxy-in", listen: "127.0.0.1", listen_port: config.port }], outbounds: [...outbounds, { type: "direct", tag: "direct" }], route: { final: selected.tag } }, null, 2) + "\n";
 }
 
 async function buildConfig() {
@@ -96,7 +96,7 @@ export async function checkLocalProxyNode(nodeId, { testUrl = HEALTH_URL } = {})
   const outbound = toOutbound(node); if (!outbound) throw new Error("Node type is not supported by sing-box");
   const port = await new Promise((resolve, reject) => { const server = net.createServer(); server.once("error", reject); server.listen(0, "127.0.0.1", () => { const value = server.address().port; server.close(() => resolve(value)); }); });
   const healthPath = path.join(directory(), `health-${node.id}.json`);
-  const healthConfig = { log: { level: "error" }, inbounds: [{ type: "mixed", tag: "proxy-in", listen: "127.0.0.1", listen_port: port }], outbounds: [outbound, { type: "direct", tag: "direct" }], route: { final: outbound.tag } };
+  const healthConfig = { log: { level: "error" }, dns: { strategy: "ipv4_only" }, inbounds: [{ type: "mixed", tag: "proxy-in", listen: "127.0.0.1", listen_port: port }], outbounds: [outbound, { type: "direct", tag: "direct" }], route: { final: outbound.tag } };
   fs.writeFileSync(healthPath, JSON.stringify(healthConfig, null, 2) + "\n", { mode: 0o600 });
   const started = Date.now(); let child; let stderr = "";
   try {

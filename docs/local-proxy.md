@@ -348,6 +348,9 @@ The runtime resolves the executable in this order:
 4. `/usr/local/bin/sing-box`, `/usr/bin/sing-box`, or `/bin/sing-box`.
 
 The Local Proxy page displays the resolved path. If no executable is found, start returns an actionable installation error instead of a raw `ENOENT` spawn error.
+### IPv4-only DNS strategy
+
+Generated sing-box configurations use DNS strategy `ipv4_only`. This avoids failed AAAA connections on hosts without an IPv6 default route while preserving the original hostname for TLS SNI and WebSocket `Host` headers. The setting applies to both the main sidecar and temporary health-check instances.
 
 ## Health-check URL
 
