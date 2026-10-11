@@ -15,7 +15,7 @@
 
 <a href="https://trendshift.io/repositories/22628" target="_blank"><img src="https://trendshift.io/api/badge/repositories/22628" alt="decolua%2F9router | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
-[🚀 Quick Start](#-quick-start) • [💡 Features](#-key-features) • [📖 Setup](#-setup-guide) • [🌐 Website](https://9router.com)
+[🚀 Quick Start](#-quick-start) • [💡 Features](#-key-features) • [📖 Setup](#-setup-guide) • [🧭 Local Proxy](./docs/local-proxy.md) • [🌐 Website](https://9router.com)
 
 [🇧🇷 Português (Brasil)](./i18n/README.pt-BR.md) • [🇻🇳 Tiếng Việt](./i18n/README.vi.md) • [🇨🇳 中文](./i18n/README.zh-CN.md) • [🇯🇵 日本語](./i18n/README.ja-JP.md) • [🇷🇺 Русский](./i18n/README.ru.md) • [🇹🇭 ไทย](./i18n/README.th.md) • [🇮🇷 فارسی](./i18n/README.fa_IR.md) • [🇮🇩 Indonesia](./i18n/README.id-ID.md) • [🇪🇸 Español](./i18n/README.es.md) • [🇫🇷 Français](./i18n/README.fr.md)
 
@@ -73,11 +73,23 @@ Result: Never stop coding, minimal cost + 20-40% token savings via RTK
 
 ## ⚡ Quick Start
 
-**1. Install globally:**
+**1. Run this modified source checkout (recommended):**
+
+This checkout contains the modified 9Router build and its Local Proxy/sing-box features. Clone it and build locally; do not install the upstream package globally:
 
 ```bash
-npm install -g 9router
-9router
+git clone https://github.com/Matsumiko/9router.git
+cd 9router
+cp .env.example .env
+npm install
+PORT=20128 NEXT_PUBLIC_BASE_URL=http://localhost:20128 npm run dev
+```
+
+For a production build, install dependencies locally and run the generated build:
+
+```bash
+npm run build
+PORT=20128 HOSTNAME=0.0.0.0 NEXT_PUBLIC_BASE_URL=http://localhost:20128 npm run start
 ```
 
 🎉 Dashboard opens at `http://localhost:20128`
@@ -97,20 +109,11 @@ Claude Code/Codex/OpenClaw/Cursor/Cline Settings:
 
 **That's it!** Start coding with FREE AI models.
 
-**Alternative: run from source (this repository):**
+**Build note for low-memory hosts:**
 
-This repository package is private (`9router-app`), so source/Docker execution is the expected local development path.
-
-```bash
-cp .env.example .env
-npm install
-PORT=20128 NEXT_PUBLIC_BASE_URL=http://localhost:20128 npm run dev
-```
-
-Production mode:
+If `npm run build` runs out of memory, create temporary swap before building, then remove it afterward:
 
 ```bash
-# Create Temporary Memory For Build
 sudo fallocate -l 2G /swapfile_temp
 sudo chmod 600 /swapfile_temp
 sudo mkswap /swapfile_temp
@@ -119,20 +122,25 @@ sudo swapon /swapfile_temp
 export MAKEFLAGS="-j1"
 export DLIB_NO_GUI_SUPPORT=1
 export CFLAGS="-mno-avx"
-
 npm run build
 
-# Clear temporary swap
 sudo swapoff /swapfile_temp
 sudo rm /swapfile_temp
-
-PORT=20128 HOSTNAME=0.0.0.0 NEXT_PUBLIC_BASE_URL=http://localhost:20128 npm run start
 ```
 
+For production runtime after a successful build:
+
+```bash
+PORT=20128 HOSTNAME=0.0.0.0 NEXT_PUBLIC_BASE_URL=http://localhost:20128 npm run start
+```
 Default URLs:
 
 - Dashboard: `http://localhost:20128/dashboard`
 - OpenAI-compatible API: `http://localhost:20128/v1`
+
+### Local Proxy / sing-box
+
+9Router includes an optional local sing-box sidecar for routing outbound HTTP requests through subscription or manually imported proxy nodes. It supports VLESS, VMess, Trojan, Shadowsocks (including `v2ray-plugin`), HTTP, and SOCKS5 nodes, per-node URL health checks, batch testing, healthy-node rotation, subscription editing, and server-side automatic health checks. See the complete [Local Proxy guide](./docs/local-proxy.md) for installation, configuration, API integration, operations, and troubleshooting.
 
 ---
 

@@ -18,4 +18,10 @@ export {
   getMitmAlias, setMitmAliasAll,
   getPricing, getPricingForModel, updatePricing, resetPricing, resetAllPricing,
   exportDb, importDb,
+  parseSubscriptionText,
+  getProxySubscriptions, getProxySubscriptionById,
+  createProxySubscription, updateProxySubscription, deleteProxySubscription,
+  refreshProxySubscription,
+  getLocalProxyNodes, getLocalProxyNodeById,
+  createLocalProxyNode, updateLocalProxyNode, deleteLocalProxyNode,
 } from "@/lib/db/index.js";

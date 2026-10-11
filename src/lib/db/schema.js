@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -73,6 +73,46 @@ export const TABLES = {
     indexes: [
       "CREATE INDEX IF NOT EXISTS idx_pp_active ON proxyPools(isActive)",
       "CREATE INDEX IF NOT EXISTS idx_pp_status ON proxyPools(testStatus)",
+    ],
+  },
+  proxySubscriptions: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      name: "TEXT NOT NULL",
+      url: "TEXT NOT NULL",
+      isActive: "INTEGER DEFAULT 1",
+      lastFetchedAt: "TEXT",
+      lastError: "TEXT",
+      data: "TEXT NOT NULL",
+      createdAt: "TEXT NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_ps_active ON proxySubscriptions(isActive)",
+      "CREATE INDEX IF NOT EXISTS idx_ps_url ON proxySubscriptions(url)",
+    ],
+  },
+  localProxyNodes: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      subscriptionId: "TEXT",
+      type: "TEXT NOT NULL",
+      name: "TEXT NOT NULL",
+      server: "TEXT NOT NULL",
+      port: "INTEGER NOT NULL",
+      enabled: "INTEGER DEFAULT 1",
+      healthStatus: "TEXT DEFAULT 'unknown'",
+      latencyMs: "INTEGER",
+      lastCheckedAt: "TEXT",
+      lastError: "TEXT",
+      data: "TEXT NOT NULL",
+      createdAt: "TEXT NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_lpn_subscription ON localProxyNodes(subscriptionId)",
+      "CREATE INDEX IF NOT EXISTS idx_lpn_enabled ON localProxyNodes(enabled)",
+      "CREATE INDEX IF NOT EXISTS idx_lpn_health ON localProxyNodes(healthStatus)",
     ],
   },
   apiKeys: {

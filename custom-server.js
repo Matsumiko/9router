@@ -45,6 +45,11 @@ function startBackgroundTokenRefreshFromCustomServer() {
       }
     });
 }
+function startLocalProxyHealthScheduler() {
+  import(pathToFileURL(path.join(__dirname, "src", "lib", "network", "localProxyHealthScheduler.js")).href)
+    .then(async (m) => { await m.configureLocalProxyAutoHealthCheck(); })
+    .catch((error) => console.warn("[LocalProxyAutoHealth] start failed:", error.message));
+}
 
 // Wrap Next standalone HTTP server: derive client IP from the TCP socket
 // (unspoofable) and strip client-supplied forwarding headers so downstream
@@ -75,6 +80,7 @@ http.createServer = (...args) => {
   const server = origCreate(...rest, wrapped);
   server.once("listening", () => {
     startBackgroundTokenRefreshFromCustomServer();
+    startLocalProxyHealthScheduler();
   });
   const origEmit = server.emit;
   // JBR 25 sends h2c upgrades that the HTTP/1.1 server would otherwise close.
