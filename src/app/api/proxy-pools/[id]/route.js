@@ -3,6 +3,7 @@ import {
   deleteProxyPool,
   getProviderConnections,
   getProxyPoolById,
+  updateProviderConnection,
   updateProxyPool,
 } from "@/models";
 
@@ -88,6 +89,26 @@ export async function PUT(request, { params }) {
   } catch (error) {
     console.log("Error updating proxy pool:", error);
     return NextResponse.json({ error: "Failed to update proxy pool" }, { status: 500 });
+  }
+}
+
+// POST /api/proxy-pools/[id] { action: "detach" } - Remove this pool from all bound connections.
+export async function POST(request, { params }) {
+  try {
+    const { id } = await params;
+    if (!await getProxyPoolById(id)) return NextResponse.json({ error: "Proxy pool not found" }, { status: 404 });
+    const body = await request.json().catch(() => ({}));
+    if (body.action !== "detach") return NextResponse.json({ error: "action must be detach" }, { status: 400 });
+    const connections = (await getProviderConnections()).filter((connection) => connection?.providerSpecificData?.proxyPoolId === id);
+    for (const connection of connections) {
+      const providerSpecificData = { ...(connection.providerSpecificData || {}) };
+      delete providerSpecificData.proxyPoolId;
+      await updateProviderConnection(connection.id, { providerSpecificData });
+    }
+    return NextResponse.json({ detachedConnectionCount: connections.length });
+  } catch (error) {
+    console.log("Error detaching proxy pool:", error);
+    return NextResponse.json({ error: "Failed to detach proxy pool" }, { status: 500 });
   }
 }
 

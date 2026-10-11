@@ -5,15 +5,18 @@ let initialized = false;
 
 export async function ensureOutboundProxyInitialized() {
   if (initialized) return true;
-
   try {
     const settings = await getSettings();
-    applyOutboundProxyEnv(settings);
+    if (settings.localProxyEnabled && settings.localProxyAutoStart) {
+      const { startLocalProxy } = await import("@/lib/network/localProxyManager.js");
+      await startLocalProxy();
+    } else {
+      applyOutboundProxyEnv(settings);
+    }
     initialized = true;
   } catch (error) {
     console.error("[ServerInit] Error initializing outbound proxy:", error);
   }
-
   return initialized;
 }
 

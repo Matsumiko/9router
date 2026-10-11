@@ -158,7 +158,26 @@ export default function ProxyPoolsPage() {
 
           const data = await res.json();
           if (res.status === 409) {
-            notify.warning(`Cannot delete: ${data.boundConnectionCount || 0} connection(s) are still using this pool.`);
+            const count = data.boundConnectionCount || 0;
+            setConfirmState({
+              title: "Detach and delete proxy pool?",
+              message: `${count} connection(s) still use "${proxyPool.name}". Detaching removes this pool assignment from those connections, then deletes the pool. Continue?`,
+              onConfirm: async () => {
+                setConfirmState(null);
+                try {
+                  const detach = await fetch(`/api/proxy-pools/${proxyPool.id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "detach" }) });
+                  const detachData = await detach.json();
+                  if (!detach.ok) throw new Error(detachData.error || "Failed to detach proxy pool");
+                  const remove = await fetch(`/api/proxy-pools/${proxyPool.id}`, { method: "DELETE" });
+                  const removeData = await remove.json();
+                  if (!remove.ok) throw new Error(removeData.error || "Failed to delete proxy pool");
+                  setProxyPools((prev) => prev.filter((item) => item.id !== proxyPool.id));
+                  notify.success(`Detached ${detachData.detachedConnectionCount || 0} connection(s) and deleted pool`);
+                } catch (error) {
+                  notify.error(error.message);
+                }
+              },
+            });
           } else {
             notify.error(data.error || "Failed to delete proxy pool");
           }

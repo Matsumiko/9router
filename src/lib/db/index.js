@@ -28,6 +28,15 @@ export {
   getProxyPools, getProxyPoolById,
   createProxyPool, updateProxyPool, deleteProxyPool,
 } from "./repos/proxyPoolsRepo.js";
+// Local proxy subscriptions and nodes
+export {
+  parseSubscriptionText,
+  getProxySubscriptions, getProxySubscriptionById,
+  createProxySubscription, updateProxySubscription, deleteProxySubscription,
+  refreshProxySubscription,
+  getLocalProxyNodes, getLocalProxyNodeById,
+  createLocalProxyNode, updateLocalProxyNode, deleteLocalProxyNode,
+} from "./repos/proxySubscriptionsRepo.js";
 
 // API keys
 export {
@@ -79,8 +88,9 @@ export async function exportDb() {
     providerConnections: db.all(`SELECT * FROM providerConnections`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, provider: r.provider, authType: r.authType, name: r.name, email: r.email, priority: r.priority, isActive: r.isActive === 1, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     providerNodes: db.all(`SELECT * FROM providerNodes`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, type: r.type, name: r.name, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     proxyPools: db.all(`SELECT * FROM proxyPools`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, isActive: r.isActive === 1, testStatus: r.testStatus, createdAt: r.createdAt, updatedAt: r.updatedAt })),
+    proxySubscriptions: db.all(`SELECT * FROM proxySubscriptions`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, name: r.name, url: r.url, isActive: r.isActive === 1, lastFetchedAt: r.lastFetchedAt, lastError: r.lastError, createdAt: r.createdAt, updatedAt: r.updatedAt })),
+    localProxyNodes: db.all(`SELECT * FROM localProxyNodes`).map((r) => ({ ...parseJson(r.data, {}), id: r.id, subscriptionId: r.subscriptionId, type: r.type, name: r.name, server: r.server, port: r.port, enabled: r.enabled === 1, healthStatus: r.healthStatus, latencyMs: r.latencyMs, lastCheckedAt: r.lastCheckedAt, lastError: r.lastError, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     apiKeys: db.all(`SELECT * FROM apiKeys`).map((r) => ({ id: r.id, key: r.key, name: r.name, machineId: r.machineId, isActive: r.isActive === 1, createdAt: r.createdAt, access: keyAccessFromColumns(r.accessRestricted, r.accessAllow) })),
-    combos: db.all(`SELECT * FROM combos`).map((r) => ({ id: r.id, name: r.name, kind: r.kind, models: parseJson(r.models, []), createdAt: r.createdAt, updatedAt: r.updatedAt })),
     modelAliases: {},
     customModels: [],
     mitmAlias: {},
@@ -107,6 +117,8 @@ export async function importDb(payload) {
     db.run(`DELETE FROM providerConnections`);
     db.run(`DELETE FROM providerNodes`);
     db.run(`DELETE FROM proxyPools`);
+    db.run(`DELETE FROM proxySubscriptions`);
+    db.run(`DELETE FROM localProxyNodes`);
     db.run(`DELETE FROM apiKeys`);
     db.run(`DELETE FROM combos`);
     db.run(`DELETE FROM kv WHERE scope IN ('modelAliases', 'customModels', 'mitmAlias', 'pricing')`);
@@ -136,6 +148,14 @@ export async function importDb(payload) {
         `INSERT OR REPLACE INTO proxyPools(id, isActive, testStatus, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?)`,
         [id, isActive === false ? 0 : 1, testStatus || "unknown", stringifyJson(rest), createdAt || new Date().toISOString(), updatedAt || new Date().toISOString()]
       );
+    }
+    for (const s of payload.proxySubscriptions || []) {
+      const { id, name, url, isActive, lastFetchedAt, lastError, createdAt, updatedAt, ...rest } = s;
+      db.run(`INSERT OR REPLACE INTO proxySubscriptions(id, name, url, isActive, lastFetchedAt, lastError, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, name, url, isActive === false ? 0 : 1, lastFetchedAt || null, lastError || null, stringifyJson(rest), createdAt || new Date().toISOString(), updatedAt || new Date().toISOString()]);
+    }
+    for (const n of payload.localProxyNodes || []) {
+      const { id, subscriptionId, type, name, server, port, enabled, healthStatus, latencyMs, lastCheckedAt, lastError, createdAt, updatedAt, ...rest } = n;
+      db.run(`INSERT OR REPLACE INTO localProxyNodes(id, subscriptionId, type, name, server, port, enabled, healthStatus, latencyMs, lastCheckedAt, lastError, data, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, subscriptionId || null, type, name, server, port, enabled === false ? 0 : 1, healthStatus || "unknown", latencyMs || null, lastCheckedAt || null, lastError || null, stringifyJson(rest), createdAt || new Date().toISOString(), updatedAt || new Date().toISOString()]);
     }
     for (const k of payload.apiKeys || []) {
       // Per-key access: a backup without `access` (older version) restores

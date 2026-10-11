@@ -87,6 +87,14 @@ export async function PATCH(request) {
       applyOutboundProxyEnv(settings);
     }
 
+    if (Object.prototype.hasOwnProperty.call(body, "localProxyEnabled") || Object.prototype.hasOwnProperty.call(body, "localProxyAutoStart")) {
+      if (settings.localProxyEnabled && settings.localProxyAutoStart) import("@/lib/network/localProxyManager.js").then(({ startLocalProxy }) => startLocalProxy()).catch((error) => console.warn("[LocalProxy] auto-start failed:", error.message));
+      if (body.localProxyEnabled === false) import("@/lib/network/localProxyManager.js").then(({ stopLocalProxy }) => stopLocalProxy()).catch((error) => console.warn("[LocalProxy] stop failed:", error.message));
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "localProxyAutoTestEnabled") || Object.prototype.hasOwnProperty.call(body, "localProxyAutoTestIntervalMinutes") || Object.prototype.hasOwnProperty.call(body, "localProxyAutoTestUrl") || Object.prototype.hasOwnProperty.call(body, "localProxyAutoFailoverEnabled")) {
+      import("@/lib/network/localProxyHealthScheduler.js").then(({ configureLocalProxyAutoHealthCheck }) => configureLocalProxyAutoHealthCheck(settings)).catch((error) => console.warn("[LocalProxyAutoHealth] settings update failed:", error.message));
+    }
+
     // Invalidate combo rotation state when strategy settings change
     if (
       Object.prototype.hasOwnProperty.call(body, "comboStrategy") ||
