@@ -16,8 +16,17 @@ globalThis.__nineRouterLocalProxyState = state;
 function directory() { const dir = path.join(getDataDir(), "local-proxy"); fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); return dir; }
 function configPath() { return path.join(directory(), "sing-box.json"); }
 function listenPort() { const value = Number(process.env.NINE_ROUTER_LOCAL_PROXY_PORT); return Number.isInteger(value) && value >= 1024 && value <= 65535 ? value : DEFAULT_PORT; }
-function executable() { return process.env.SING_BOX_BIN || process.env.SINGBOX_BIN || "sing-box"; }
-
+function isExecutable(candidate) { try { fs.accessSync(candidate, fs.constants.X_OK); return true; } catch { return false; } }
+function executable() {
+  const configured = process.env.SING_BOX_BIN || process.env.SINGBOX_BIN;
+  const candidates = [];
+  if (configured) candidates.push(configured);
+  for (const directory of String(process.env.PATH || "").split(path.delimiter).filter(Boolean)) candidates.push(path.join(directory, "sing-box"));
+  if (process.env.HOME) candidates.push(path.join(process.env.HOME, ".local", "bin", "sing-box"));
+  candidates.push("/usr/local/bin/sing-box", "/usr/bin/sing-box", "/bin/sing-box");
+  return candidates.find((candidate) => isExecutable(candidate)) || null;
+}
+function missingExecutableError() { return new Error("sing-box binary not found. Install sing-box or set SING_BOX_BIN to its executable path."); }
 function toOutbound(node) {
   if (node.outbound && typeof node.outbound === "object") {
     const outbound = { ...node.outbound, tag: node.id };
@@ -60,14 +69,16 @@ function canConnect(port) { return new Promise((resolve) => { const socket = net
 async function waitForPort(port, child, timeoutMs = 10000) { const deadline = Date.now() + timeoutMs; while (Date.now() < deadline) { if (await canConnect(port)) return; if (child.exitCode !== null) throw new Error(`sing-box exited with code ${child.exitCode ?? "unknown"}`); await new Promise((resolve) => setTimeout(resolve, 100)); } throw new Error(`sing-box did not listen on 127.0.0.1:${port}`); }
 async function stopChild(child) { if (!child || child.exitCode !== null) return; await new Promise((resolve) => { const timer = setTimeout(() => { child.kill("SIGKILL"); resolve(); }, 2000); child.once("exit", () => { clearTimeout(timer); resolve(); }); child.kill("SIGTERM"); }); }
 
-export async function getLocalProxyStatus() { const { getLocalProxyAutoHealthStatus } = await import("@/lib/network/localProxyHealthScheduler.js"); return { available: Boolean(process.env.SING_BOX_BIN || process.env.SINGBOX_BIN), runtime: "sing-box", running: Boolean(state.process && !state.process.killed), pid: state.pid, startedAt: state.startedAt, lastError: state.lastError, proxyUrl: `http://127.0.0.1:${listenPort()}`, configPath: configPath(), selectedNodeId: state.selectedNodeId, autoHealth: getLocalProxyAutoHealthStatus(), subscriptions: await getProxySubscriptions(), nodes: await getLocalProxyNodes() }; }
+export async function getLocalProxyStatus() { const { getLocalProxyAutoHealthStatus } = await import("@/lib/network/localProxyHealthScheduler.js"); const binaryPath = executable(); return { available: Boolean(binaryPath), binaryPath, runtime: "sing-box", running: Boolean(state.process && !state.process.killed), pid: state.pid, startedAt: state.startedAt, lastError: state.lastError, proxyUrl: `http://127.0.0.1:${listenPort()}`, configPath: configPath(), selectedNodeId: state.selectedNodeId, autoHealth: getLocalProxyAutoHealthStatus(), subscriptions: await getProxySubscriptions(), nodes: await getLocalProxyNodes() }; }
 export async function selectLocalProxyNode(nodeId) { const node = await getLocalProxyNodeById(nodeId); if (!node) throw new Error("Local proxy node not found"); if (!node.enabled) throw new Error("Local proxy node is disabled"); state.selectedNodeId = nodeId; if (state.process && !state.process.killed) { await stopLocalProxy(); await startLocalProxy(); } return getLocalProxyStatus(); }
 export async function rotateLocalProxyNode() { const nodes = (await getLocalProxyNodes({ enabledOnly: true })).filter((node) => node.healthStatus !== "unhealthy"); if (!nodes.length) throw new Error("No healthy enabled local proxy nodes"); state.rotationCursor = (state.rotationCursor + 1) % nodes.length; return selectLocalProxyNode(nodes[state.rotationCursor].id); }
 
 export async function startLocalProxy() {
   if (state.process && !state.process.killed) return getLocalProxyStatus();
+  const binaryPath = executable();
+  if (!binaryPath) throw missingExecutableError();
   const config = await buildConfig();
-  const child = spawn(executable(), ["run", "-c", config.path], { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(binaryPath, ["run", "-c", config.path], { detached: true, stdio: ["ignore", "pipe", "pipe"] });
   state.process = child; state.pid = child.pid; state.startedAt = new Date().toISOString(); state.lastError = null;
   child.on("error", (error) => { state.lastError = `Unable to start sing-box: ${error.message}`; state.process = null; state.pid = null; applyOutboundProxyEnv({ outboundProxyEnabled: false }); });
   child.stderr.on("data", (chunk) => { state.lastError = String(chunk).trim().slice(-1000); });

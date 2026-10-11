@@ -52,6 +52,8 @@ const DEFAULT_SETTINGS = {
   localProxyAutoTestIntervalMinutes: 15,
   localProxyAutoTestUrl: "https://www.gstatic.com/generate_204",
   localProxyAutoFailoverEnabled: false,
+  localProxyRotationStrategy: "failover",
+  localProxyRotationIntervalMinutes: 30,
   dnsToolEnabled: {},
   rtkEnabled: true,
   headroomEnabled: false,

@@ -303,7 +303,7 @@ Rotation does not run a new health check. Run **Test all nodes** first when curr
 
 Manual batch testing runs through `PUT /api/local-proxy/nodes` and tests nodes sequentially. Automatic testing uses a bounded concurrency of four nodes.
 
-## Automatic node testing
+## Automatic node testing and rotation
 
 The **Automatic node testing** card controls a server-side scheduler. It continues while the 9Router server is running and does not depend on an open dashboard tab.
 
@@ -312,11 +312,17 @@ Settings:
 | Setting | Default | Behavior |
 | --- | ---: | --- |
 | Enabled | `false` | Starts or stops the background scheduler. |
-| Interval | 15 minutes | UI allows 5, 10, 15, 30, or 60 minutes. Runtime clamps accepted values to 5–120 minutes. |
+| Test interval | 15 minutes | Runtime clamps accepted values to 5–120 minutes. |
 | Test URL | `https://www.gstatic.com/generate_204` | Public HTTP(S) URL requested through each enabled node. |
-| Auto failover | `false` | Optional switch to another healthy node after repeated failure of the active node. |
+| Auto failover | `false` | Optional switch to another healthy node after three consecutive failures of the active node. |
+| Rotation strategy | `failover` | `failover` disables scheduled rotation; `periodic` advances to the next healthy node; `weighted` selects a healthy node with higher probability when its measured latency is lower. |
+| Rotation interval | 30 minutes | Runtime clamps accepted values to 15–240 minutes. |
 
-Save the settings with **Save auto test**. The card shows the last run, next scheduled run, and the most recent healthy/total result.
+Scheduled rotation requires automatic testing and an active selected node. Failover is evaluated first; when failover changes the active route, that run does not also perform scheduled rotation. Rotation only selects nodes reported `healthy`, never `degraded` or `unhealthy`, and restarts the sidecar through the existing node-selection path so the new route is applied.
+
+The status response includes `lastRotationAt` and `lastRotation` with the strategy and source/target node IDs. The default remains failover-only and does not change the active route automatically.
+
+Save the settings with **Save auto test** or **Save rotation**. The dashboard shows the last health run, next scheduled run, and latest rotation.
 
 ### Failure policy
 
@@ -332,6 +338,16 @@ Automatic testing is intentionally conservative:
 - failover is skipped when no healthy replacement exists.
 
 Automatic failover is off by default. Enable it only when changing the active route without operator confirmation is acceptable.
+### sing-box binary detection
+
+The runtime resolves the executable in this order:
+
+1. `SING_BOX_BIN`, when set to an executable path;
+2. `sing-box` in the process `PATH`;
+3. `$HOME/.local/bin/sing-box`;
+4. `/usr/local/bin/sing-box`, `/usr/bin/sing-box`, or `/bin/sing-box`.
+
+The Local Proxy page displays the resolved path. If no executable is found, start returns an actionable installation error instead of a raw `ENOENT` spawn error.
 
 ## Health-check URL
 
@@ -549,11 +565,13 @@ Relevant PATCH body:
   "localProxyAutoTestEnabled": true,
   "localProxyAutoTestIntervalMinutes": 15,
   "localProxyAutoTestUrl": "https://www.gstatic.com/generate_204",
-  "localProxyAutoFailoverEnabled": false
+  "localProxyAutoFailoverEnabled": false,
+  "localProxyRotationStrategy": "failover",
+  "localProxyRotationIntervalMinutes": 30
 }
 ```
 
-The scheduler is reconfigured immediately after a successful settings update.
+The strategy accepts `failover`, `periodic`, or `weighted`. The scheduler is reconfigured immediately after a successful settings update.
 
 ## Integration behavior
 

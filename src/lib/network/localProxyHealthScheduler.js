@@ -3,6 +3,7 @@ import { getSettings } from "@/lib/db/repos/settingsRepo.js";
 import { checkLocalProxyNode, selectLocalProxyNode } from "@/lib/network/localProxyManager.js";
 
 const DEFAULT_INTERVAL_MINUTES = 15;
+const DEFAULT_ROTATION_INTERVAL_MINUTES = 30;
 const DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204";
 const MAX_CONCURRENCY = 4;
 const FAILOVER_THRESHOLD = 3;
@@ -16,12 +17,23 @@ const state = globalThis.__nineRouterLocalProxyHealthScheduler || {
   lastResult: null,
   failures: new Map(),
   lastFailoverAt: 0,
+  lastRotationAt: null,
+  lastRotation: null,
 };
 globalThis.__nineRouterLocalProxyHealthScheduler = state;
 
 function intervalMs(settings) {
   const minutes = Number(settings.localProxyAutoTestIntervalMinutes);
   return (Number.isFinite(minutes) ? Math.min(Math.max(minutes, 5), 120) : DEFAULT_INTERVAL_MINUTES) * 60 * 1000;
+}
+
+function rotationIntervalMs(settings) {
+  const minutes = Number(settings.localProxyRotationIntervalMinutes);
+  return (Number.isFinite(minutes) ? Math.min(Math.max(minutes, 15), 240) : DEFAULT_ROTATION_INTERVAL_MINUTES) * 60 * 1000;
+}
+
+function rotationStrategy(settings) {
+  return ["periodic", "weighted"].includes(settings.localProxyRotationStrategy) ? settings.localProxyRotationStrategy : "failover";
 }
 
 async function testNode(node, testUrl) {
@@ -65,6 +77,33 @@ async function maybeFailover(results, settings) {
   state.lastFailoverAt = Date.now();
   return { fromNodeId: selectedId, toNodeId: replacement.id };
 }
+function chooseRotationNode(results, strategy, selectedId) {
+  const candidates = results.filter((node) => node.enabled && node.healthStatus === "healthy");
+  if (candidates.length < 2) return null;
+  if (strategy === "periodic") {
+    const selectedIndex = candidates.findIndex((node) => node.id === selectedId);
+    return candidates[(selectedIndex + 1 + candidates.length) % candidates.length];
+  }
+  const weighted = candidates.filter((node) => node.id !== selectedId).map((node) => ({ node, weight: 1 / Math.max(1, Number(node.latencyMs) || 1000) }));
+  if (!weighted.length) return null;
+  const total = weighted.reduce((sum, item) => sum + item.weight, 0);
+  let cursor = Math.random() * total;
+  for (const item of weighted) { cursor -= item.weight; if (cursor <= 0) return item.node; }
+  return weighted[weighted.length - 1].node;
+}
+
+async function maybeRotate(results, settings) {
+  const strategy = rotationStrategy(settings);
+  if (!settings.localProxyAutoTestEnabled || !["periodic", "weighted"].includes(strategy)) return null;
+  if (!globalThis.__nineRouterLocalProxyState?.selectedNodeId || Date.now() - (state.lastRotationAt || 0) < rotationIntervalMs(settings)) return null;
+  const selectedId = globalThis.__nineRouterLocalProxyState.selectedNodeId;
+  const replacement = chooseRotationNode(results, strategy, selectedId);
+  if (!replacement) return null;
+  await selectLocalProxyNode(replacement.id);
+  state.lastRotationAt = Date.now();
+  state.lastRotation = { strategy, fromNodeId: selectedId, toNodeId: replacement.id };
+  return state.lastRotation;
+}
 
 export async function runLocalProxyAutoHealthCheck() {
   if (state.running) return state.lastResult;
@@ -76,7 +115,8 @@ export async function runLocalProxyAutoHealthCheck() {
     const nodes = await getLocalProxyNodes({ enabledOnly: true });
     const results = await testWithLimit(nodes, settings.localProxyAutoTestUrl || DEFAULT_TEST_URL);
     const failover = await maybeFailover(results, settings);
-    state.lastResult = { testedNodes: results.length, healthyNodes: results.filter((node) => node.healthStatus === "healthy").length, unhealthyNodes: results.filter((node) => node.healthStatus !== "healthy").length, failover };
+    const rotation = failover ? null : await maybeRotate(results, settings);
+    state.lastResult = { testedNodes: results.length, healthyNodes: results.filter((node) => node.healthStatus === "healthy").length, unhealthyNodes: results.filter((node) => node.healthStatus !== "healthy").length, failover, rotation };
     return state.lastResult;
   } finally {
     state.running = false;
@@ -105,6 +145,4 @@ export async function configureLocalProxyAutoHealthCheck(settings = null) {
   schedule();
 }
 
-export function getLocalProxyAutoHealthStatus() {
-  return { running: state.running, lastRunAt: state.lastRunAt, nextRunAt: state.nextRunAt, lastResult: state.lastResult };
-}
+export function getLocalProxyAutoHealthStatus() { return { running: state.running, lastRunAt: state.lastRunAt, nextRunAt: state.nextRunAt, lastResult: state.lastResult, lastRotationAt: state.lastRotationAt ? new Date(state.lastRotationAt).toISOString() : null, lastRotation: state.lastRotation }; }
