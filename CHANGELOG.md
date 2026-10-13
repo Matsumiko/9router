@@ -14,6 +14,7 @@
 - **Dashboard**: open 9Remote sidebar item directly to website
 
 ## Fixes
+- **Local Proxy**: preserve VMess/VLESS transports, TLS SNI, Reality/uTLS settings, and normalize legacy/2022 Shadowsocks links before generating sing-box outbounds
 - **Dashboard**: fix mobile layouts for API Keys card (alignment, code wrap), header breadcrumbs (overflow collision), model chips (full width, break-all), and Claude CLI settings
 - **Gemini**: do not treat properties map as schema node when tool parameter is named `properties` (#4620); rename `$ref` keys in `functionResponse` payloads
 - **Translator**: uniquify duplicate `tool_call_ids` for Gemini (#4532)

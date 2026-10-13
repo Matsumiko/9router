@@ -73,6 +73,28 @@ function findManagedProcess(expectedConfigPath) {
 function writePidFile(pid) { fs.writeFileSync(pidPath(), `${pid}\n`, { mode: 0o600 }); }
 function clearPidFile(pid) { try { if (!pid || fs.readFileSync(pidPath(), "utf8").trim() === String(pid)) fs.unlinkSync(pidPath()); } catch {} }
 function formatSingBoxStartupError(stderr, fallback) { const detail = String(stderr || "").trim(); return detail || String(fallback || "sing-box failed to start"); }
+function buildStreamSettings(params = {}, { tlsEnabled = false, defaultSni = "" } = {}) {
+  const network = params.type === "h2" ? "http" : (params.type || "tcp");
+  const pathValue = params.path || "";
+  const host = params.host || "";
+  const transport = network === "ws"
+    ? { type: "ws", ...(pathValue ? { path: pathValue.split("?ed=")[0] || "/" } : { path: "/" }), ...(host ? { headers: { Host: host } } : {}), ...(Number(new URLSearchParams(pathValue.split("?")[1] || "").get("ed")) > 0 ? { max_early_data: Number(new URLSearchParams(pathValue.split("?")[1]).get("ed")), early_data_header_name: "Sec-WebSocket-Protocol" } : {}) }
+    : network === "grpc"
+      ? { type: "grpc", ...(params.serviceName || pathValue ? { service_name: params.serviceName || pathValue } : {}) }
+      : network === "http"
+        ? { type: "http", ...(pathValue ? { path: pathValue } : {}), ...(host ? { host: host.split(",").filter(Boolean) } : {}) }
+        : network === "httpupgrade"
+          ? { type: "httpupgrade", ...(pathValue ? { path: pathValue } : {}), ...(host ? { host } : {}) }
+          : network === "tcp" && params.headerType === "http"
+            ? { type: "http", method: "GET", path: pathValue || "/", ...(host ? { headers: { Host: host } } : {}) }
+            : null;
+  const security = params.security || (tlsEnabled ? "tls" : "");
+  const tls = security === "tls" || security === "reality" || tlsEnabled
+    ? { enabled: true, ...(params.allowInsecure === "1" || params.allowInsecure === "true" ? { insecure: true } : {}), ...(params.sni || params.peer || defaultSni ? { server_name: params.sni || params.peer || defaultSni } : {}), ...(params.alpn ? { alpn: params.alpn.split(",").filter(Boolean) } : {}), ...(security === "reality" && params.pbk ? { reality: { enabled: true, public_key: params.pbk, ...(params.sid ? { short_id: params.sid.split(",")[0] } : {}) } } : {}), ...(params.fp ? { utls: { enabled: true, fingerprint: params.fp } } : {}) }
+    : undefined;
+  return { ...(transport ? { transport } : {}), ...(tls ? { tls } : {}) };
+}
+
 function toOutbound(node) {
   if (node.outbound && typeof node.outbound === "object") {
     const outbound = { ...node.outbound, tag: node.id };
@@ -84,14 +106,16 @@ function toOutbound(node) {
     return outbound;
   }
   const base = { tag: node.id || node.name, type: node.type, server: node.server, server_port: node.port };
-  if (node.type === "vmess") return { ...base, uuid: node.uuid, alter_id: Number(node.alterId || 0), security: node.cipher || "auto", network: node.network || "tcp", tls: node.tls ? { enabled: true, server_name: node.host || node.server } : undefined };
-  if (node.type === "vless") {
-    const tls = node.params?.security === "tls" ? { enabled: true, server_name: node.params?.sni || node.server } : undefined;
-    const transport = node.params?.type === "ws" ? { type: "ws", path: node.params?.path || "/", headers: node.params?.host ? { Host: node.params.host } : undefined } : undefined;
-    return { ...base, uuid: node.uuid, network: node.params?.type === "ws" ? "tcp" : node.params?.type || "tcp", flow: node.params?.flow || undefined, tls, transport };
+  if (node.type === "vmess") {
+    const params = { ...(node.params || {}), type: node.network || node.params?.type || "tcp", path: node.path || node.params?.path || "", host: node.host || node.params?.host || "", sni: node.sni || node.params?.sni || "", security: node.params?.security || (node.tls ? "tls" : "") };
+    return { ...base, uuid: node.uuid, alter_id: Number(node.alterId || 0), security: node.cipher || "auto", ...buildStreamSettings(params, { defaultSni: node.sni || node.host || node.server }) };
   }
-  if (node.type === "trojan") return { ...base, password: node.password, tls: { enabled: true, server_name: node.params?.sni || node.server } };
-  if (["http", "https"].includes(node.type)) return { ...base, type: "http", username: node.username || undefined, password: node.password || undefined, tls: node.type === "https" ? { enabled: true, server_name: node.server } : undefined };
+  if (node.type === "vless") {
+    const params = node.params || {};
+    return { ...base, uuid: node.uuid, flow: params.flow && params.flow !== "none" ? params.flow.replace(/-udp443$/, "") : undefined, ...buildStreamSettings(params, { defaultSni: node.server }) };
+  }
+  if (node.type === "trojan") return { ...base, password: node.password, ...buildStreamSettings(node.params || {}, { tlsEnabled: true, defaultSni: node.server }) };
+  if (["http", "https"].includes(node.type)) return { ...base, type: "http", username: node.username || undefined, password: node.password || undefined, ...(node.type === "https" ? { tls: { enabled: true, server_name: node.server } } : {}) };
   if (["socks5", "socks5h"].includes(node.type)) return { ...base, type: "socks", username: node.username || undefined, password: node.password || undefined };
   return null;
 }

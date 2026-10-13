@@ -34,38 +34,66 @@ function parseVmess(uri, index) {
     const encoded = decodeBase64(uri.slice(8).split("#")[0]);
     const value = JSON.parse(encoded);
     const server = value.add || value.server;
-    const nodePort = port(value.port);
-    if (!server || !nodePort || !value.id) return null;
-    return { type: "vmess", name: decodeURIComponent(uri.split("#")[1] || value.ps || `VMESS ${index + 1}`), server, port: nodePort, uuid: value.id, alterId: Number(value.aid || 0) || 0, cipher: value.scy || "auto", network: value.net || "tcp", tls: value.tls === "tls", host: value.host || value.sni || "", path: value.path || "", uri };
+    const nodePort = port(value.port) || 443;
+    if (!server || !value.id) return null;
+    return { type: "vmess", name: decodeURIComponent(uri.split("#")[1] || value.ps || `VMESS ${index + 1}`), server, port: nodePort, uuid: value.id, alterId: Number(value.aid || 0) || 0, cipher: value.scy || "auto", network: value.net || "tcp", tls: ["tls", "reality"].includes(value.tls), host: value.host || "", sni: value.sni || "", path: value.path || "", params: { type: value.net || "tcp", security: value.tls || "", sni: value.sni || "", host: value.host || "", path: value.path || "" }, uri };
   } catch {
     try {
       const parsed = new URL(uri);
-      const nodePort = port(parsed.port);
-      if (!parsed.hostname || !nodePort || !parsed.username) return null;
-      return { type: "vmess", name: parsed.hash ? decodeURIComponent(parsed.hash.slice(1)) : `VMESS ${index + 1}`, server: parsed.hostname, port: nodePort, uuid: decodeURIComponent(parsed.username), network: parsed.searchParams.get("type") || "tcp", tls: parsed.searchParams.get("security") === "tls", host: parsed.searchParams.get("host") || parsed.searchParams.get("sni") || "", path: parsed.searchParams.get("path") || "", params: Object.fromEntries(parsed.searchParams.entries()), uri };
+      const nodePort = port(parsed.port) || 443;
+      if (!parsed.hostname || !parsed.username) return null;
+      const security = parsed.searchParams.get("security") || "";
+      return { type: "vmess", name: parsed.hash ? decodeURIComponent(parsed.hash.slice(1)) : `VMESS ${index + 1}`, server: parsed.hostname, port: nodePort, uuid: decodeURIComponent(parsed.username), network: parsed.searchParams.get("type") || "tcp", tls: ["tls", "reality"].includes(security), host: parsed.searchParams.get("host") || "", sni: parsed.searchParams.get("sni") || parsed.searchParams.get("peer") || "", path: parsed.searchParams.get("path") || "", params: Object.fromEntries(parsed.searchParams.entries()), uri };
     } catch { return null; }
   }
 }
 
-function parseUri(uri, index) {
+function parseShadowsocks(uri, index) {
   const raw = text(uri);
-  if (!raw || raw.startsWith("#") || raw.toLowerCase().startsWith("vmess://")) return raw.toLowerCase().startsWith("vmess://") ? parseVmess(raw, index) : null;
+  const hashIndex = raw.indexOf("#");
+  const fragment = hashIndex >= 0 ? raw.slice(hashIndex + 1) : "";
+  const withoutFragment = hashIndex >= 0 ? raw.slice(0, hashIndex) : raw;
+  const payload = withoutFragment.slice("ss://".length);
   let parsed;
-  try { parsed = new URL(raw); } catch { return null; }
-  if (!SUPPORTED_SCHEMES.has(parsed.protocol) || !parsed.hostname || !port(parsed.port)) return null;
-  const type = parsed.protocol.slice(0, -1);
-  const node = { type, name: parsed.hash ? decodeURIComponent(parsed.hash.slice(1)) : `${type.toUpperCase()} ${index + 1}`, server: parsed.hostname, port: port(parsed.port), uri: raw, params: Object.fromEntries(parsed.searchParams.entries()) };
-  if (type === "ss") {
-    const encoded = parsed.username ? `${parsed.username}${parsed.password ? `:${parsed.password}` : ""}` : parsed.host;
-    const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+  try {
+    if (!payload.includes("@")) {
+      const decoded = decodeBase64(payload);
+      if (!decoded.includes("@")) return null;
+      parsed = new URL(`ss://${decoded}`);
+    } else parsed = new URL(withoutFragment);
+  } catch { return null; }
+  const serverPort = port(parsed.port);
+  if (!parsed.hostname || !serverPort) return null;
+  let method;
+  let password;
+  if (parsed.password) {
+    method = decodeURIComponent(parsed.username);
+    password = decodeURIComponent(parsed.password);
+  } else {
+    const decoded = decodeBase64(decodeURIComponent(parsed.username));
     const separator = decoded.indexOf(":");
     if (separator <= 0) return null;
-    const method = decoded.slice(0, separator);
-    const password = decoded.slice(separator + 1);
-    const pluginSpec = parsed.searchParams.get("plugin") || "";
-    const [plugin, ...pluginOptions] = pluginSpec.split(";");
-    node.outbound = { type: "shadowsocks", server: parsed.hostname, server_port: port(parsed.port), method, password, plugin: plugin || undefined, plugin_opts: pluginOptions.join(";") || undefined };
+    method = decoded.slice(0, separator);
+    password = decoded.slice(separator + 1);
   }
+  if (!method || !password) return null;
+  const pluginSpec = parsed.searchParams.get("plugin") || "";
+  const [plugin, ...pluginOptions] = pluginSpec.split(";");
+  return { type: "ss", name: fragment ? decodeURIComponent(fragment) : `SS ${index + 1}`, server: parsed.hostname, port: serverPort, params: Object.fromEntries(parsed.searchParams.entries()), outbound: { type: "shadowsocks", server: parsed.hostname, server_port: serverPort, method, password, plugin: plugin === "simple-obfs" ? "obfs-local" : (plugin || undefined), plugin_opts: pluginOptions.join(";") || undefined }, uri: raw };
+}
+
+function parseUri(uri, index) {
+  const raw = text(uri);
+  if (!raw || raw.startsWith("#")) return null;
+  if (raw.toLowerCase().startsWith("vmess://")) return parseVmess(raw, index);
+  if (raw.toLowerCase().startsWith("ss://")) return parseShadowsocks(raw, index);
+  let parsed;
+  try { parsed = new URL(raw); } catch { return null; }
+  if (!SUPPORTED_SCHEMES.has(parsed.protocol) || !parsed.hostname) return null;
+  const type = parsed.protocol.slice(0, -1);
+  const nodePort = port(parsed.port) || (["vless", "trojan", "https"].includes(type) ? 443 : 0);
+  if (!nodePort) return null;
+  const node = { type, name: parsed.hash ? decodeURIComponent(parsed.hash.slice(1)) : `${type.toUpperCase()} ${index + 1}`, server: parsed.hostname, port: nodePort, uri: raw, params: Object.fromEntries(parsed.searchParams.entries()) };
   if (type === "vless") node.uuid = decodeURIComponent(parsed.username);
   if (type === "trojan") node.password = decodeURIComponent(parsed.username || parsed.pathname.slice(1));
   if (["http", "https", "socks5", "socks5h"].includes(type)) { node.username = decodeURIComponent(parsed.username || ""); node.password = decodeURIComponent(parsed.password || ""); }
