@@ -1,14 +1,14 @@
+const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build"
+  || process.env.NEXT_PHASE === "phase-export"
+  || process.env.NEXT_PHASE === "phase-static";
+
 export async function register() {
-  if (process.env.NEXT_RUNTIME === "nodejs") {
-    const { initConsoleLogCapture } = await import("@/lib/consoleLogBuffer");
-    initConsoleLogCapture();
+  if (isBuildPhase || process.env.NEXT_RUNTIME !== "nodejs") return;
 
-    // Server-only: lets capabilities.js read the synced catalog without pulling
-    // node:fs into the dashboard's browser bundle.
-    const { installCatalogSource } = await import("open-sse/providers/catalogOverride.js");
-    await installCatalogSource();
-
-    const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
-    startModelCatalogSync();
+  try {
+    const { configureLocalProxyAutoHealthCheck } = await import("@/lib/network/localProxyHealthScheduler.js");
+    await configureLocalProxyAutoHealthCheck();
+  } catch (error) {
+    console.error("[LocalProxyAutoHealth] startup scheduler failed:", error.message);
   }
 }

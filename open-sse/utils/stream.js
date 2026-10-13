@@ -77,6 +77,7 @@ export function createSSEStream(options = {}) {
   let totalContentLength = 0;
   let accumulatedContent = "";
   let accumulatedThinking = "";
+  let meaningfulOutput = false;
   let ttftAt = null;
   let sseLineCount = 0;
   let sseEmittedCount = 0;
@@ -105,7 +106,9 @@ export function createSSEStream(options = {}) {
       if (isPassthrough) usage = finalUsage; else state.usage = finalUsage;
     }
 
-    if (hasValidUsage(finalUsage)) {
+    if (!meaningfulOutput) {
+      appendRequestLog({ model, provider, connectionId, tokens: null, status: "FAILED 502" }).catch(() => { });
+    } else if (hasValidUsage(finalUsage)) {
       logUsage(isPassthrough ? provider : (state?.provider || targetFormat), finalUsage, model, connectionId, apiKey);
     } else {
       appendRequestLog({ model, provider, connectionId, tokens: null, status: "200 OK" }).catch(() => { });
@@ -115,7 +118,7 @@ export function createSSEStream(options = {}) {
       onStreamComplete({
         content: accumulatedContent,
         thinking: accumulatedThinking
-      }, finalUsage, ttftAt);
+      }, finalUsage, ttftAt, { meaningful: meaningfulOutput });
     }
   };
 
@@ -212,6 +215,7 @@ export function createSSEStream(options = {}) {
               const delta = parsed.choices?.[0]?.delta;
               const content = delta?.content;
               const reasoning = delta?.reasoning_content;
+              if ((typeof content === "string" && content.length > 0) || (typeof reasoning === "string" && reasoning.length > 0) || (Array.isArray(delta?.tool_calls) && delta.tool_calls.length > 0)) meaningfulOutput = true;
               if (content && typeof content === "string") {
                 totalContentLength += content.length;
                 accumulatedContent += content;
@@ -315,31 +319,36 @@ export function createSSEStream(options = {}) {
         }
 
         // Claude format - content
-        if (parsed.delta?.text) {
+        if (parsed.delta?.text) { meaningfulOutput = true;
           totalContentLength += parsed.delta.text.length;
           accumulatedContent += parsed.delta.text;
         }
-        // Claude format - thinking
         if (parsed.delta?.thinking) {
+          meaningfulOutput = true;
           totalContentLength += parsed.delta.thinking.length;
           accumulatedThinking += parsed.delta.thinking;
+        } else if (parsed.delta?.partial_json) {
+          meaningfulOutput = true;
+          totalContentLength += parsed.delta.partial_json.length;
         }
         
         // OpenAI format - content
-        if (parsed.choices?.[0]?.delta?.content) {
+        if (parsed.choices?.[0]?.delta?.content) { meaningfulOutput = true;
           totalContentLength += parsed.choices[0].delta.content.length;
           accumulatedContent += parsed.choices[0].delta.content;
         }
         // OpenAI format - reasoning
-        if (parsed.choices?.[0]?.delta?.reasoning_content) {
+        if (parsed.choices?.[0]?.delta?.reasoning_content) { meaningfulOutput = true;
           totalContentLength += parsed.choices[0].delta.reasoning_content.length;
           accumulatedThinking += parsed.choices[0].delta.reasoning_content;
         }
+        if (Array.isArray(parsed.choices?.[0]?.delta?.tool_calls) && parsed.choices[0].delta.tool_calls.length > 0) meaningfulOutput = true;
         
         // Gemini format
         if (parsed.candidates?.[0]?.content?.parts) {
           for (const part of parsed.candidates[0].content.parts) {
-            if (part.text && typeof part.text === "string") {
+            if (part.functionCall || part.function_call || part.inlineData || part.inline_data) meaningfulOutput = true;
+            if (part.text && typeof part.text === "string") { meaningfulOutput = true;
               totalContentLength += part.text.length;
               // Check if this is thinking content
               if (part.thought === true) {
@@ -350,6 +359,8 @@ export function createSSEStream(options = {}) {
             }
           }
         }
+        if (typeof parsed.delta === "string" && parsed.delta.length > 0) meaningfulOutput = true;
+        if (Array.isArray(parsed.output) && parsed.output.some((item) => item?.type === "message" || item?.type === "function_call" || item?.type === "custom_tool_call" || item?.type === "reasoning")) meaningfulOutput = true;
 
         // Extract usage
         const extracted = extractUsage(parsed);

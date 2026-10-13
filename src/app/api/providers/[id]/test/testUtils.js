@@ -21,6 +21,15 @@ import {
   KIMCHI_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
+function isLocalSidecarProxyUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    const port = String(process.env.NINE_ROUTER_LOCAL_PROXY_PORT || "20129");
+    return parsed.protocol === "http:" && parsed.hostname === "127.0.0.1" && parsed.port === port;
+  } catch {
+    return false;
+  }
+}
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -888,7 +897,7 @@ export async function testSingleConnection(id) {
 
   const effectiveProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});
 
-  if (effectiveProxy.connectionProxyEnabled && effectiveProxy.connectionProxyUrl && !effectiveProxy.vercelRelayUrl) {
+  if (effectiveProxy.connectionProxyEnabled && effectiveProxy.connectionProxyUrl && !effectiveProxy.vercelRelayUrl && !isLocalSidecarProxyUrl(effectiveProxy.connectionProxyUrl)) {
     const proxyResult = await testProxyUrl({ proxyUrl: effectiveProxy.connectionProxyUrl });
     if (!proxyResult.ok) {
       const proxyError = proxyResult.error || `Proxy test failed with status ${proxyResult.status}`;

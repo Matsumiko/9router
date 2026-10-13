@@ -10,6 +10,7 @@ import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
 // Responses-API providers (e.g. codex) may emit SSE without content-type + use Responses output shape
 const isResponsesProvider = (p) => PROVIDERS[p]?.format === FORMATS.OPENAI_RESPONSES;
 import { saveRequestDetail, appendRequestLog } from "@/lib/usageDb.js";
+import { emptyChatResponseMessage, hasMeaningfulChatResponse } from "./responseValidation.js";
 
 function textFromResponsesMessageItem(item) {
   if (!item?.content || !Array.isArray(item.content)) return "";
@@ -201,6 +202,11 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
   if (isCodexResponsesApi) {
     try {
       const jsonResponse = await convertResponsesStreamToJson(providerResponse.body);
+      if (!hasMeaningfulChatResponse(jsonResponse)) {
+        const message = emptyChatResponseMessage(provider);
+        appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+        return createErrorResult(HTTP_STATUS.BAD_GATEWAY, message);
+      }
       if (onRequestSuccess) await onRequestSuccess();
 
       const usage = jsonResponse.usage || {};
@@ -309,6 +315,11 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
       );
     }
 
+    if (!hasMeaningfulChatResponse(parsed)) {
+      const message = emptyChatResponseMessage(provider);
+      appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+      return createErrorResult(HTTP_STATUS.BAD_GATEWAY, message);
+    }
     if (onRequestSuccess) await onRequestSuccess();
 
     const usage = parsed.usage || {};

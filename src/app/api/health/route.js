@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { getRuntimeFingerprint } from "@/lib/runtimeFingerprint.js";
+export const dynamic = "force-dynamic";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -7,7 +9,7 @@ const CORS_HEADERS = {
 };
 
 export async function GET() {
-  return NextResponse.json({ ok: true }, { headers: CORS_HEADERS });
+  return NextResponse.json({ ok: true, runtimeFingerprint: getRuntimeFingerprint() }, { headers: CORS_HEADERS });
 }
 
 export async function OPTIONS() {

@@ -113,6 +113,120 @@ function isTlsCertError(err) {
   const code = err?.cause?.code || err?.code;
   return TLS_CERT_ERRORS.has(code);
 }
+const TRANSPORT_PHASES = Object.freeze({
+  DNS: "dns",
+  TCP_CONNECT: "tcp_connect",
+  TLS: "tls",
+  PROXY_TUNNEL: "proxy_tunnel",
+  RESPONSE_HEADERS: "response_headers",
+  FIRST_TOKEN: "first_token",
+  STREAM_INTERRUPTION: "stream_interruption",
+  CANCELLED: "cancelled",
+});
+
+function errorSignals(error, options) {
+  const signals = [];
+  const seen = new Set();
+  let current = error;
+  for (let depth = 0; current && depth < 8 && !seen.has(current); depth += 1) {
+    seen.add(current);
+    signals.push(String(current.code || ""), String(current.name || ""), String(current.message || ""));
+    current = current.cause;
+  }
+  if (options?.signal?.reason) {
+    const reason = options.signal.reason;
+    signals.push(String(reason.code || ""), String(reason.name || ""), String(reason.message || reason));
+  }
+  return signals.join(" ").toLowerCase();
+}
+
+function classifyTransportPhase(error, options, proxyUrl) {
+  const abortReason = String(options?.signal?.reason?.message || options?.signal?.reason || "");
+  if (options?.signal?.aborted && !/fetch connect timeout/i.test(abortReason)) {
+    return TRANSPORT_PHASES.CANCELLED;
+  }
+  if (/fetch connect timeout/i.test(abortReason)) return TRANSPORT_PHASES.RESPONSE_HEADERS;
+  const text = errorSignals(error, options);
+  if (/enotfound|eai_again|eai_fail|eai_nodata|dns|name resolution/.test(text)) return TRANSPORT_PHASES.DNS;
+  if (/tls|certificate|cert_|self_signed|unable_to_verify|altname/.test(text)) return TRANSPORT_PHASES.TLS;
+  if (proxyUrl && /proxy|connect tunnel|tunnel|407/.test(text)) return TRANSPORT_PHASES.PROXY_TUNNEL;
+  if (/und_err_connect_timeout|econnrefused|econnreset|econnaborted|etimedout|connect timeout|socket/.test(text)) {
+    return TRANSPORT_PHASES.TCP_CONNECT;
+  }
+  return TRANSPORT_PHASES.RESPONSE_HEADERS;
+}
+
+function safeEndpoint(value) {
+  try {
+    const parsed = new URL(value);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return "unknown";
+  }
+}
+
+function safeProxyEndpoint(value) {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return "configured";
+  }
+}
+
+function annotateTransportError(error, phase, targetUrl, proxyUrl) {
+  const annotated = error instanceof Error ? error : new Error(String(error));
+  if (!annotated.proxyPhase) annotated.proxyPhase = phase;
+  if (!annotated.proxyTarget) annotated.proxyTarget = safeEndpoint(targetUrl);
+  if (!annotated.proxyEndpoint && proxyUrl) annotated.proxyEndpoint = safeProxyEndpoint(proxyUrl);
+  return annotated;
+}
+
+function logTransportError(error) {
+  const proxy = error.proxyEndpoint ? ` proxy=${error.proxyEndpoint}` : "";
+  console.warn(`[ProxyFetch] phase=${error.proxyPhase} target=${error.proxyTarget}${proxy} error=${error.message}`);
+}
+
+function wrapProxyPolicyError(message, error) {
+  const wrapped = new Error(`${message}: ${error.message}`, { cause: error });
+  if (error?.proxyPhase) wrapped.proxyPhase = error.proxyPhase;
+  if (error?.proxyTarget) wrapped.proxyTarget = error.proxyTarget;
+  if (error?.proxyEndpoint) wrapped.proxyEndpoint = error.proxyEndpoint;
+  return wrapped;
+}
+
+function instrumentResponseBody(response, targetUrl, proxyUrl) {
+  const reader = response?.body?.getReader?.();
+  if (!reader) return response;
+  let receivedChunk = false;
+  const body = new ReadableStream({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          controller.close();
+          return;
+        }
+        receivedChunk = true;
+        controller.enqueue(result.value);
+      } catch (error) {
+        const phase = receivedChunk ? TRANSPORT_PHASES.STREAM_INTERRUPTION : TRANSPORT_PHASES.FIRST_TOKEN;
+        const annotated = annotateTransportError(error, phase, targetUrl, proxyUrl);
+        logTransportError(annotated);
+        controller.error(annotated);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
 const MITM_BYPASS_HOSTS = [
   "cloudcode-pa.googleapis.com",
   "daily-cloudcode-pa.googleapis.com",
@@ -236,7 +350,6 @@ async function getDispatcher(proxyUrl, insecure = false) {
 
   const key = `${normalized || "direct"}::${insecure ? "insecure" : "secure"}`;
   if (!proxyDispatchers.has(key)) {
-    // Evict oldest entry if max size reached
     if (proxyDispatchers.size >= MEMORY_CONFIG.proxyDispatchersMaxSize) {
       proxyDispatchers.delete(proxyDispatchers.keys().next().value);
     }
@@ -247,27 +360,82 @@ async function getDispatcher(proxyUrl, insecure = false) {
       : new Agent({ connect });
     proxyDispatchers.set(key, dispatcher);
   }
-
   return proxyDispatchers.get(key);
 }
 
 async function fetchWithTlsFallback(url, options, proxyUrl) {
+  const targetUrl = typeof url === "string" ? url : url.toString();
   try {
     const dispatcher = proxyUrl ? await getDispatcher(proxyUrl) : undefined;
-    return await originalFetch(url, dispatcher ? { ...options, dispatcher } : options);
+    const response = await originalFetch(url, dispatcher ? { ...options, dispatcher } : options);
+    return instrumentResponseBody(response, targetUrl, proxyUrl);
   } catch (err) {
     const isStrictSsl = process.env.STRICT_SSL === "true" || process.env.STRICT_SSL === "1";
     if (!isStrictSsl && isTlsCertError(err)) {
       if (options.body && typeof options.body.getReader === "function" && options.body.locked) {
-        throw err;
+        const annotated = annotateTransportError(err, TRANSPORT_PHASES.TLS, targetUrl, proxyUrl);
+        logTransportError(annotated);
+        throw annotated;
       }
-      // ponytail: in-memory insecure agent fallback for self-signed MITM corporate/antivirus certs
-      console.warn(`[ProxyFetch] TLS cert verification failed (${err.cause?.code || err.code}), retrying with insecure TLS: ${url}`);
-      const insecureDispatcher = await getDispatcher(proxyUrl, true);
-      return await originalFetch(url, { ...options, dispatcher: insecureDispatcher });
+      console.warn(`[ProxyFetch] TLS cert verification failed (${err.cause?.code || err.code}), retrying with insecure TLS: ${targetUrl}`);
+      try {
+        const insecureDispatcher = await getDispatcher(proxyUrl, true);
+        const response = await originalFetch(url, { ...options, dispatcher: insecureDispatcher });
+        return instrumentResponseBody(response, targetUrl, proxyUrl);
+      } catch (retryError) {
+        const annotated = annotateTransportError(retryError, TRANSPORT_PHASES.TLS, targetUrl, proxyUrl);
+        logTransportError(annotated);
+        throw annotated;
+      }
     }
-    throw err;
+    const annotated = annotateTransportError(err, classifyTransportPhase(err, options, proxyUrl), targetUrl, proxyUrl);
+    logTransportError(annotated);
+    throw annotated;
   }
+}
+
+function isLocalSidecarProxy(proxyUrl) {
+  try {
+    const parsed = new URL(proxyUrl);
+    const configuredPort = String(process.env.NINE_ROUTER_LOCAL_PROXY_PORT || "20129");
+    return parsed.protocol === "http:" && parsed.hostname === "127.0.0.1" && parsed.port === configuredPort;
+  } catch { return false; }
+}
+function shouldAllowDirectFallback(proxyUrl, options, proxyOptions) {
+  if (!isLocalSidecarProxy(proxyUrl)) return true;
+  if (proxyOptions?.allowDirectFallback === true) return true;
+  const method = String(options?.method || "GET").toUpperCase();
+  return method === "GET" || method === "HEAD" || method === "OPTIONS";
+}
+
+
+function canReplayRequestBody(options) {
+  const body = options?.body;
+  if (!body) return true;
+  if (typeof body === "string" || body instanceof URLSearchParams || body instanceof Uint8Array || Buffer.isBuffer(body)) return true;
+  return !(typeof body.getReader === "function" || typeof body.pipe === "function" || typeof body[Symbol.asyncIterator] === "function");
+}
+
+async function fetchThroughLocalSidecarWithFailover(url, options, proxyUrl, proxyOptions) {
+  const tried = [];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await fetchWithTlsFallback(url, options, proxyUrl);
+    } catch (proxyError) {
+      if (!canReplayRequestBody(options) || options.signal?.aborted) throw proxyError;
+      const failover = globalThis.__nineRouterRequestProxyFailover;
+      if (typeof failover !== "function") throw proxyError;
+      const result = await failover(proxyError.message, tried, {
+        target: safeEndpoint(typeof url === "string" ? url : url.toString()),
+        attempt: attempt + 1,
+        phase: proxyError.proxyPhase || classifyTransportPhase(proxyError, options, proxyUrl),
+        directFallbackAllowed: shouldAllowDirectFallback(proxyUrl, options, proxyOptions),
+      });
+      if (!result?.switched) throw proxyError;
+      if (result.nodeId) tried.push(result.nodeId);
+    }
+  }
+  throw new Error("Local sidecar proxy candidates exhausted");
 }
 
 /**
@@ -329,6 +497,11 @@ async function createBypassRequest(parsedUrl, realIP, options) {
   });
 }
 
+async function fetchWithProxyPolicy(url, options, proxyUrl, proxyOptions) {
+  if (isLocalSidecarProxy(proxyUrl)) return fetchThroughLocalSidecarWithFailover(url, options, proxyUrl, proxyOptions);
+  return fetchWithTlsFallback(url, options, proxyUrl);
+}
+
 export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
   const targetUrl = typeof url === "string" ? url : url.toString();
 
@@ -356,11 +529,10 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
     if (proxyUrl) {
       // Proxy resolves DNS externally (not affected by /etc/hosts) — use proxy directly
       try {
-        return await fetchWithTlsFallback(url, options, proxyUrl);
+        return await fetchWithProxyPolicy(url, options, proxyUrl, proxyOptions);
       } catch (proxyError) {
-        if (proxyOptions?.strictProxy === true) {
-          throw new Error(`[ProxyFetch] Proxy required but failed (strictProxy=true): ${proxyError.message}`);
-        }
+        if (proxyOptions?.strictProxy === true) throw wrapProxyPolicyError("[ProxyFetch] Proxy required but failed (strictProxy=true)", proxyError);
+        if (!shouldAllowDirectFallback(proxyUrl, options, proxyOptions)) throw proxyError;
         console.warn(`[ProxyFetch] Proxy failed, falling back to direct bypass: ${proxyError.message}`);
       }
     }
@@ -376,12 +548,11 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
 
   if (proxyUrl) {
     try {
-      return await fetchWithTlsFallback(url, options, proxyUrl);
+      return await fetchWithProxyPolicy(url, options, proxyUrl, proxyOptions);
     } catch (proxyError) {
       // If strictProxy is enabled, fail hard instead of falling back to direct
-      if (proxyOptions?.strictProxy === true) {
-        throw new Error(`[ProxyFetch] Proxy required but failed (strictProxy=true): ${proxyError.message}`);
-      }
+      if (proxyOptions?.strictProxy === true) throw wrapProxyPolicyError("[ProxyFetch] Proxy required but failed (strictProxy=true)", proxyError);
+      if (!shouldAllowDirectFallback(proxyUrl, options, proxyOptions)) throw proxyError;
       console.warn(`[ProxyFetch] Proxy failed, falling back to direct: ${proxyError.message}`);
       return fetchWithTlsFallback(url, options, null);
     }

@@ -76,6 +76,10 @@ export async function PATCH(request) {
       }
     }
 
+    if (Object.prototype.hasOwnProperty.call(body, "localProxyEnabled") || Object.prototype.hasOwnProperty.call(body, "localProxyAutoStart")) {
+      if (body.localProxyAutoStart === true) body.localProxyEnabled = true;
+      if (body.localProxyEnabled === false) body.localProxyAutoStart = false;
+    }
     const settings = await updateSettings(body);
 
     // Apply outbound proxy settings immediately (no restart required)

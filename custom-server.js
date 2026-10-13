@@ -4,6 +4,8 @@ const fs = require("fs");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
 
+process.env.NINE_ROUTER_BUNDLE_PATH ||= __dirname;
+
 const origCreate = http.createServer.bind(http);
 
 // Per-process secret proving x-9r-real-ip was stamped below rather than sent by the client.
@@ -45,11 +47,17 @@ function startBackgroundTokenRefreshFromCustomServer() {
       }
     });
 }
-function startLocalProxyHealthScheduler() {
-  import(pathToFileURL(path.join(__dirname, "src", "lib", "network", "localProxyHealthScheduler.js")).href)
-    .then(async (m) => { await m.configureLocalProxyAutoHealthCheck(); })
-    .catch((error) => console.warn("[LocalProxyAutoHealth] start failed:", error.message));
+function startLocalProxyShutdownHooks() {
+  const stop = () => {
+    import(pathToFileURL(path.join(__dirname, "src", "lib", "network", "localProxyManager.js")).href)
+      .then(({ stopLocalProxy }) => stopLocalProxy())
+      .catch((error) => console.warn("[LocalProxy] shutdown failed:", error.message))
+      .finally(() => process.exit(0));
+  };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
 }
+
 
 // Wrap Next standalone HTTP server: derive client IP from the TCP socket
 // (unspoofable) and strip client-supplied forwarding headers so downstream
@@ -80,7 +88,7 @@ http.createServer = (...args) => {
   const server = origCreate(...rest, wrapped);
   server.once("listening", () => {
     startBackgroundTokenRefreshFromCustomServer();
-    startLocalProxyHealthScheduler();
+    startLocalProxyShutdownHooks();
   });
   const origEmit = server.emit;
   // JBR 25 sends h2c upgrades that the HTTP/1.1 server would otherwise close.

@@ -16,9 +16,85 @@ Local Proxy is an optional, local-only sing-box sidecar in 9Router. It routes su
 - Healthy-node rotation.
 - Optional server-side automatic health checks.
 - Optional automatic failover after repeated failures.
+- Persistent sidecar auto-start setting from the Local Proxy dashboard.
 - Generated sing-box configuration preview.
 
-The sidecar is disabled until it is started from the dashboard. Automatic health testing is also disabled by default.
+The sidecar is disabled until it is started from the dashboard or auto-start is enabled. Automatic health testing is also disabled by default. Auto-start runs only when both the local sidecar and auto-start settings are enabled.
+
+## Runtime/build fingerprint
+
+`GET /api/health` and `GET /api/local-proxy` expose the same `runtimeFingerprint` object. It contains the production bundle path, server PID, build timestamp (or Next `BUILD_ID` file timestamp), build identity, and source identity without including environment secrets:
+
+```json
+{
+  "runtimeFingerprint": {
+    "bundlePath": ".next/standalone",
+    "serverPid": 12345,
+    "buildId": "<next-build-id>",
+    "buildTimestamp": "<iso-timestamp>",
+    "buildIdentity": "<stable-hash>",
+    "packageVersion": "0.5.99",
+    "sourceIdentity": "version-0.5.99"
+  }
+}
+```
+
+`sourceIdentity` uses `NINE_ROUTER_SOURCE_ID`, `GIT_COMMIT_SHA`, or `GITHUB_SHA` when supplied by the build environment; otherwise it falls back to the package version. `buildIdentity` is a short hash of the non-secret build/source metadata.
+
+## Transport failure phases
+
+Proxy transport errors carry a non-secret `proxyPhase` field and log the target/proxy origin in sanitized form. The phase values are:
+
+- `dns` — hostname resolution failed;
+- `tcp_connect` — socket connection failed or timed out;
+- `tls` — certificate or TLS negotiation failed;
+- `proxy_tunnel` — proxy authentication/tunnel negotiation failed;
+- `response_headers` — the upstream did not produce response headers;
+- `first_token` — response headers arrived, but the first body chunk failed;
+- `stream_interruption` — a body stream failed after at least one chunk;
+- `cancelled` — the caller aborted the request.
+
+Response-body failures are annotated lazily when the caller reads the body, so a `200` response can still produce a transport-phase error later. These annotations are diagnostic only; they do not change retry, failover, or direct-fallback policy.
+
+## Structured request failover evidence
+
+The authenticated `GET /api/local-proxy` response exposes `requestFailoverCount` and the latest bounded `requestFailoverEvidence` entries. Each entry contains `target`, `fromNodeId`, `toNodeId`, `attempt`, `phase`, `reason`, `directFallbackAllowed`, `switched`, and timestamp `at`. Target and reason values are sanitized; credentials, request paths, query strings, and bodies are not stored.
+
+Evidence is recorded at the Local Proxy manager—the authority that selects the replacement node—so a failed selection and a successful switch are both visible. The evidence is diagnostic and does not itself trigger another retry or failover.
+
+### Request-level failover example
+
+A request sent through the active sidecar node can trigger failover before an upstream response exists:
+
+1. Node A fails at TCP connect.
+2. The manager marks Node A as `degraded`, selects eligible Node B, and records evidence.
+3. The same request is retried through Node B instead of being sent directly.
+
+Provider-test connections addressed to the local sidecar skip the separate standalone proxy probe because that probe cannot represent the selector’s active route. Their actual provider request still goes through `proxyAwareFetch`, so the request-level retry supplies the meaningful proxy signal.
+
+```json
+{
+  "at": "<iso-timestamp>",
+  "target": "http://upstream.example",
+  "fromNodeId": "node-a",
+  "toNodeId": "node-b",
+  "attempt": 1,
+  "phase": "tcp_connect",
+  "reason": "fetch failed",
+  "directFallbackAllowed": true,
+  "switched": true
+}
+```
+
+The dashboard’s **Failover observability** card displays this evidence as:
+
+- **Active node:** replacement node, or `-` when no node is selected;
+- **Failover count:** number of recorded request-failover events;
+- **Last phase:** transport phase from the latest evidence;
+- **Direct fallback allowed:** number of evidence entries permitting direct egress;
+- **Last failover switched/not switched**, timestamp, **From → to**, **Attempt**, **Target**, fallback policy, and reason.
+
+`Target` contains only the URL origin. Evidence is in-memory, limited to the latest 50 entries, and lost on process restart.
 
 ## Requirements
 
@@ -28,9 +104,6 @@ The sidecar is disabled until it is started from the dashboard. Automatic health
 - Public HTTP(S) access to the configured health-check URL.
 
 The binary must include the outbound types required by the imported nodes. The application uses the executable configured through `SING_BOX_BIN` or `SINGBOX_BIN`; if neither is set, it falls back to `sing-box` on `PATH`.
-
-## Install sing-box
-
 9Router does not bundle sing-box. Install the binary separately on the same machine, verify it, then point 9Router to the executable with `SING_BOX_BIN`.
 
 ### Debian or Ubuntu
@@ -198,7 +271,7 @@ If the binary is already on `PATH`, no extra variable is required:
 sing-box version
 ```
 
-The dashboard is at `/dashboard/local-proxy`. The default Local Proxy listener is `127.0.0.1:20129`.
+The dashboard is at `/dashboard/local-proxy`. The default Local Proxy listener is `127.0.0.1:20129` unless `NINE_ROUTER_LOCAL_PROXY_PORT` is configured.
 
 The 9Router process needs write access to its data directory. The generated sing-box configuration is stored at `<DATA_DIR>/local-proxy/sing-box.json` with mode `0600`.
 
@@ -293,9 +366,9 @@ Disabled nodes are excluded from the sidecar configuration and automatic health 
 
 ### Rotate healthy
 
-**Rotate healthy** moves the selected node to the next enabled node whose status is not `unhealthy`. It uses an in-memory cursor and restarts the sidecar when necessary so the selected outbound is actually applied.
+**Rotate healthy** moves the selected node to the next enabled node whose status is not `unhealthy`. When the sidecar is running, selection is applied through its loopback Clash API selector without restarting the sidecar; if that API is unavailable, the existing restart path is used.
 
-Rotation does not run a new health check. Run **Test all nodes** first when current health information is required. The cursor resets after a process restart.
+Request-level transport failover is serialized through the same selected-node state. A failed local-sidecar connection may switch to another eligible enabled node, up to three candidates per request. Requests that already received an upstream response are not replayed, and HTTP provider errors are not treated as node failures. After sidecar candidates are exhausted, direct fallback is allowed for `GET`, `HEAD`, and `OPTIONS`; non-idempotent methods (including chat/stream `POST`) remain proxy-only unless the caller explicitly passes `allowDirectFallback: true`. `strictProxy: true` still fails rather than using direct egress.
 
 ### Test all nodes
 
@@ -318,9 +391,73 @@ Settings:
 | Rotation strategy | `failover` | `failover` disables scheduled rotation; `periodic` advances to the next healthy node; `weighted` selects a healthy node with higher probability when its measured latency is lower. |
 | Rotation interval | 30 minutes | Runtime clamps accepted values to 15–240 minutes. |
 
-Scheduled rotation requires automatic testing and an active selected node. Failover is evaluated first; when failover changes the active route, that run does not also perform scheduled rotation. Rotation only selects nodes reported `healthy`, never `degraded` or `unhealthy`, and restarts the sidecar through the existing node-selection path so the new route is applied.
+Scheduled rotation requires automatic testing and an active selected node. Failover is evaluated first; when failover changes the active route, that run does not also perform scheduled rotation. Rotation only selects nodes reported `healthy`, never `degraded` or `unhealthy`. A live sidecar uses the selector API so existing connections are not recreated by a process restart.
 
-The status response includes `lastRotationAt` and `lastRotation` with the strategy and source/target node IDs. The default remains failover-only and does not change the active route automatically.
+Request failover is separate from scheduled health testing but uses the same node health records and selected-node authority. It only handles transport failures before an upstream response exists and has a maximum of three candidate attempts. If no eligible proxy remains, the caller's existing direct-fallback or strict-proxy policy decides whether direct egress is allowed.
+
+### Observed provider test notes
+
+The latest fresh-bundle run used a clean production build, a restarted standalone server, and a newly started sidecar. `ag/gemini-pro-agent` returned HTTP 200 in about 4.5 seconds but produced empty content with `finish_reason=max_tokens`. `ag/gemini-3.1-pro-low` and both DeepSeek probes did not complete within their bounded client timeouts during that run. All four model IDs were present in `/v1/models`; timeout results therefore require phase-level evidence before being classified as proxy defects.
+
+## Improvement priority register
+
+This register is the source of truth for Local Proxy follow-up work. Do not repeat a lower-priority item while a higher-priority item is incomplete. A result is `verified` only when the latest source has been built, the running server has been restarted from that build, and the changed behavior has been exercised.
+
+| Priority | Item | Owner | Dependency | Acceptance criterion | Status |
+|---|---|---|---|---|---|
+| P0 | Build/runtime fingerprint | Server bootstrap, `/api/health`, Local Proxy status | None | Every test records build ID, bundle directory, server PID, and source/build timestamp; the running PID must match the freshly built bundle before model testing. | Next |
+| P0 | Safe direct fallback for non-idempotent requests | `open-sse/utils/proxyFetch.js` and provider request policy | P0 fingerprint | POST chat/stream does not silently replay through direct egress after proxy exhaustion unless explicitly allowed; GET/HEAD behavior remains policy-controlled. | Next |
+| P0 | Preserve no-replay stream invariant | `proxyFetch` and stream callers | P0 fallback policy | A request that received response headers or emitted a token is never replayed to another node or direct egress. | Designed; needs regression proof |
+| P1 | Phase-aware timeout classification | `proxyFetch` | P0 fallback policy | Logs distinguish DNS, TCP connect, TLS/proxy tunnel, response-header, first-token, provider HTTP, and stream interruption failures. | Implemented; smoke verified |
+| P1 | Structured failover evidence | Local Proxy manager and request logs | P1 timeout classification | Each failover records target, from-node, to-node, attempt, phase, reason, and whether direct fallback was allowed. | Implemented; request context smoke verified |
+| P1 | Empty successful response validation | Provider response/adapter layer | P1 evidence | HTTP 200 with empty content and no tool call is surfaced as an invalid provider response, not reported as a successful chat. | Implemented; JSON and streaming completion validation |
+| P2 | Deterministic synthetic failover tests | Local Proxy test harness | P0/P1 behavior | Invalid node A plus valid node B proves switch, degraded marking, successful request, and no direct fallback; all-invalid cases prove POST and GET policies separately. | Manager A→B and all-candidates-failed tests added; runtime harness pending |
+| P2 | Dashboard failover observability | Local Proxy dashboard/API | P1 structured evidence | Runtime card shows active node, last failover, failure phase, failover count, and direct-fallback count. | Next |
+
+### Confirmed versus unverified findings
+
+Confirmed by the latest fresh-bundle run:
+
+- clean production build completed successfully;
+- the rebuilt standalone server was restarted and identified by a new PID;
+- `/api/local-proxy` returned `200` from the rebuilt bundle;
+- `selectedNodeId` was populated in the rebuilt runtime;
+- sing-box config validation passed;
+- the selector had 103 candidates and a live active node;
+- `ag/gemini-pro-agent` returned HTTP 200 with empty content and `finish_reason=max_tokens`;
+- the DeepSeek probes exceeded the bounded test timeout.
+
+Not yet proven and MUST NOT be treated as a defect until tested:
+
+- that the DeepSeek timeouts were caused by the proxy node rather than provider or adapter latency;
+- that request-level failover switches nodes during a real transport failure from the API path;
+- that direct fallback duplicated a provider POST;
+- that the empty Gemini response is caused by routing rather than token/reasoning budget or adapter mapping.
+
+## Regression checklist before declaring a change complete
+
+Run the checklist in this order:
+
+1. Build the source and record the build ID, bundle path, build exit code, and stderr.
+2. Stop the previous server and sidecar; start the freshly built bundle.
+3. Verify server PID, bundle path, `/api/health`, `/api/local-proxy`, and `selectedNodeId`.
+4. Run `sing-box check` against the generated config.
+5. Verify the selector's current node and candidate count through the loopback Clash API.
+6. Test one non-streaming request and one streaming request through the selected model.
+7. Test a transport failure with a synthetic invalid node and verify bounded failover.
+8. Verify an HTTP provider error does not rotate the node.
+9. Verify a response that has started is never replayed.
+10. Verify POST exhaustion follows the explicit direct-fallback policy and does not silently duplicate the request.
+11. Verify GET/HEAD exhaustion follows its configured direct-fallback policy.
+12. Record the exact model, node, build ID, PID, elapsed time, status, finish reason, and response-content outcome.
+
+### Stop conditions
+
+- Stop and fix P0 before running P1/P2 interpretation tests.
+- Stop and rebuild if the server PID or bundle path does not match the current source build.
+- Stop and classify the failure if a model times out; do not label it a proxy defect without phase evidence.
+- Stop if a POST is replayed after response headers or tokens have been sent.
+
 
 Save the settings with **Save auto test** or **Save rotation**. The dashboard shows the last health run, next scheduled run, and latest rotation.
 
@@ -385,6 +522,20 @@ The dashboard Test URL and automatic-test setting take precedence for their resp
 | `PORT` | project/runtime dependent | 9Router dashboard HTTP port. |
 | `HOSTNAME` | runtime dependent | Dashboard bind address. |
 | `NEXT_PUBLIC_BASE_URL` | runtime dependent | Public/base URL used by the dashboard. |
+
+For example:
+
+```bash
+NINE_ROUTER_LOCAL_PROXY_PORT=20729 npm run dev
+```
+
+produces:
+
+```text
+http://127.0.0.1:20729
+```
+
+Restart the 9Router process after changing the port. The status API and dashboard Runtime card report the configured listener, and the same configured value determines which `127.0.0.1` HTTP proxy URL is treated as the local sidecar.
 
 The generated configuration is stored at:
 
@@ -583,9 +734,10 @@ When the sidecar starts, 9Router generates a sing-box config containing:
 - a local mixed inbound on `127.0.0.1:<NINE_ROUTER_LOCAL_PROXY_PORT>`;
 - one outbound for each enabled, supported node;
 - a direct outbound;
-- a final route pointing to the selected node or the first supported outbound.
+- a `proxy-auto` selector containing all enabled supported nodes;
+- a final route pointing to `proxy-auto`;
 
-9Router then applies the loopback proxy to its supported server-side outbound requests through `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`. `NO_PROXY` includes loopback hosts. The environment is process-local and is cleared by 9Router when the sidecar stops.
+9Router then applies the loopback proxy to its supported server-side outbound requests through `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`. `NO_PROXY` includes loopback hosts. The environment is process-local and is cleared by 9Router when the sidecar stops. OAuth hosts `oauth2.googleapis.com` and `www.googleapis.com` are routed direct by the sidecar before the selector.
 
 Health checks do not reuse the long-running sidecar. Each check builds a temporary one-node sing-box configuration, starts a temporary local listener, sends the probe through it, stores the result, and removes the temporary configuration.
 

@@ -12,7 +12,7 @@ import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, sav
 import { appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { decloakToolNames } from "../../utils/claudeCloaking.js";
 import { restoreToolNames } from "../../utils/opencodeFingerprint.js";
-import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
+import { emptyChatResponseMessage, hasMeaningfulChatResponse } from "./responseValidation.js";
 
 function parseToolArguments(value) {
   if (!value) return {};
@@ -311,6 +311,12 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   // bare OpenAI body and usage tracking sees data.usage. No-op unless the
   // provider opts in via transport.quirks.clineEnvelope.
   responseBody = unwrapClineEnvelope(responseBody, provider);
+  if (!hasMeaningfulChatResponse(responseBody)) {
+    const message = emptyChatResponseMessage(provider);
+    appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+    console.warn(`[ChatCore] ${message}`);
+    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, message);
+  }
 
   reqLogger.logProviderResponse(providerResponse.status, providerResponse.statusText, providerResponse.headers, responseBody);
   if (onRequestSuccess) {

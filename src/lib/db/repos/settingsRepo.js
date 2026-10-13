@@ -47,6 +47,8 @@ const DEFAULT_SETTINGS = {
   outboundProxyEnabled: false,
   outboundProxyUrl: "",
   outboundNoProxy: "",
+  localProxyEnabled: false,
+  localProxyAutoStart: false,
   mitmRouterBaseUrl: DEFAULT_MITM_ROUTER_BASE,
   localProxyAutoTestEnabled: false,
   localProxyAutoTestIntervalMinutes: 15,
