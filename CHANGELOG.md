@@ -14,6 +14,7 @@
 - **Dashboard**: open 9Remote sidebar item directly to website
 
 ## Fixes
+- **Local Proxy**: add provider-level sidecar exclusion and scoped bulk deletion for degraded nodes
 - **Local Proxy**: preserve VMess/VLESS transports, TLS SNI, Reality/uTLS settings, and normalize legacy/2022 Shadowsocks links before generating sing-box outbounds
 - **Dashboard**: fix mobile layouts for API Keys card (alignment, code wrap), header breadcrumbs (overflow collision), model chips (full width, break-all), and Claude CLI settings
 - **Gemini**: do not treat properties map as schema node when tool parameter is named `properties` (#4620); rename `$ref` keys in `functionResponse` payloads
@@ -27,6 +28,9 @@
 - **Ollama**: report `prompt_eval_cached_count` as cached tokens in usage tracking
 - **Muse**: route Responses-only models to declared transport and nest reasoning effort
 - **TTS**: accept server model and voice in self-hosted example
+
+## Documentation
+- **Local Proxy**: add modular English and Indonesian guides covering installation, configuration, health checks, operations, API reference, architecture, troubleshooting, and security.
 
 # v0.5.95 (2026-10-01)
 

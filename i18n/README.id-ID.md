@@ -11,9 +11,10 @@
   [![Downloads](https://img.shields.io/npm/dm/9router.svg)](https://www.npmjs.com/package/9router)
   [![License](https://img.shields.io/npm/l/9router.svg)](https://github.com/decolua/9router/blob/main/LICENSE)
 
-  [🚀 Mulai Cepat](#-mulai-cepat) • [💡 Fitur](#-fitur-utama) • [📖 Setup](#-panduan-setup) • [🌐 Website](https://9router.com)
+  [🚀 Mulai Cepat](#-mulai-cepat) • [💡 Fitur](#-fitur-utama) • [📖 Setup](#-panduan-setup) • [🧭 Local Proxy](../docs/local-proxy.id.md) • [🌐 Website](https://9router.com)
 
   [🇻🇳 Tiếng Việt](./README.vi.md) • [🇨🇳 中文](./README.zh-CN.md) • [🇯🇵 日本語](./README.ja-JP.md) • [🇮🇩 Bahasa Indonesia](./README.id-ID.md)
+
 </div>
 
 ---
@@ -109,6 +110,12 @@ PORT=20128 HOSTNAME=0.0.0.0 NEXT_PUBLIC_BASE_URL=http://localhost:20128 npm run 
 URL default:
 - Dashboard: `http://localhost:20128/dashboard`
 - API kompatibel OpenAI: `http://localhost:20128/v1`
+
+### Local Proxy / sing-box
+
+9Router memiliki sidecar sing-box lokal opsional untuk meneruskan request outbound melalui node subscription atau node manual. Fitur ini mendukung VLESS, VMess, Trojan, Shadowsocks, HTTP, dan SOCKS5, health check per-node, batch testing, rotasi node sehat, health check otomatis server-side, failover request terbatas, serta pengecualian sidecar per provider.
+
+Lihat [panduan Local Proxy Bahasa Indonesia](../docs/local-proxy.id.md) untuk dokumentasi modular tentang instalasi, konfigurasi, health check, operasi, referensi API, arsitektur, troubleshooting, dan keamanan.
 
 ---
 

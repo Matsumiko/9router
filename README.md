@@ -140,7 +140,9 @@ Default URLs:
 
 ### Local Proxy / sing-box
 
-9Router includes an optional local sing-box sidecar for routing outbound HTTP requests through subscription or manually imported proxy nodes. It supports VLESS, VMess, Trojan, Shadowsocks (including `v2ray-plugin`), HTTP, and SOCKS5 nodes, per-node URL health checks, batch testing, healthy-node rotation, subscription editing, and server-side automatic health checks. See the complete [Local Proxy guide](./docs/local-proxy.md) for installation, configuration, API integration, operations, and troubleshooting.
+9Router includes an optional local sing-box sidecar for routing outbound HTTP requests through subscription or manually imported proxy nodes. It supports VLESS, VMess, Trojan, Shadowsocks (including `v2ray-plugin`), HTTP, and SOCKS5 nodes, per-node URL health checks, batch testing, healthy-node rotation, subscription editing, server-side automatic health checks, bounded request failover, and provider-level sidecar exclusion.
+
+See the complete [Local Proxy guide](./docs/local-proxy.md) for the English modular documentation map, and the [Bahasa Indonesia guide](./docs/local-proxy.id.md) for the Indonesian version. The guide links installation, configuration, health checks, operations, API reference, architecture, troubleshooting, and security.
 
 ---
 
