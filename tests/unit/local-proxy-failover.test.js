@@ -57,12 +57,13 @@ describe("sing-box startup diagnostics", () => {
   it("preserves the runtime stderr when sing-box exits before binding", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
-    const fakeBinary = "/tmp/9router-failover-test/sing-box-fails";
+    const fakeBinary = "/tmp/9router-failover-test/proxy-fails";
     fs.mkdirSync(path.dirname(fakeBinary), { recursive: true });
     fs.writeFileSync(fakeBinary, "#!/bin/sh\necho 'FATAL start inbound: bind: address already in use' >&2\nexit 1\n", { mode: 0o700 });
     vi.resetModules();
     vi.stubEnv("SING_BOX_BIN", fakeBinary);
-    delete globalThis.__nineRouterLocalProxyState;
+    vi.stubEnv("NINE_ROUTER_LOCAL_PROXY_PORT", "29129");
+    vi.stubEnv("NINE_ROUTER_LOCAL_PROXY_CONTROLLER_PORT", "29130");
     mocks.getLocalProxyNodes.mockResolvedValue([nodes.a]);
     const manager = await import("../../src/lib/network/localProxyManager.js");
 
