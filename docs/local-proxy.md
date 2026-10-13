@@ -293,6 +293,10 @@ The 9Router process needs write access to its data directory. The generated sing
 
 Starting the sidecar applies the local proxy to 9Router's supported server-side outbound fetch path. Stopping it clears only proxy environment values managed by 9Router.
 
+### Restarting or rebuilding 9Router
+
+The Local Proxy sidecar is an independent `sing-box` process. Rebuilding or restarting the dashboard does not require starting a second sidecar. On startup, 9Router reuses a managed `sing-box` process that already owns the generated configuration and listener. If another process owns `127.0.0.1:20129`, the dashboard reports sing-box's diagnostic, including the bind failure, instead of only an exit code.
+
 ## Subscription management
 
 ### Add a subscription

@@ -43,6 +43,7 @@ function recordRequestFailoverEvidence(context, fromNodeId, toNodeId, switched, 
 
 function directory() { const dir = path.join(getDataDir(), "local-proxy"); fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); return dir; }
 function configPath() { return path.join(directory(), "sing-box.json"); }
+function pidPath() { return path.join(directory(), "sing-box.pid"); }
 function listenPort() { const value = Number(process.env.NINE_ROUTER_LOCAL_PROXY_PORT); return Number.isInteger(value) && value >= 1024 && value <= 65535 ? value : DEFAULT_PORT; }
 function isExecutable(candidate) { try { fs.accessSync(candidate, fs.constants.X_OK); return true; } catch { return false; } }
 function executable() {
@@ -55,6 +56,23 @@ function executable() {
   return candidates.find((candidate) => isExecutable(candidate)) || null;
 }
 function missingExecutableError() { return new Error("sing-box binary not found. Install sing-box or set SING_BOX_BIN to its executable path."); }
+function processCommandLine(pid) { try { return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").replaceAll("\0", " "); } catch { return ""; } }
+function isManagedProcess(pid, expectedConfigPath) { const command = processCommandLine(pid); return command.includes("sing-box") && command.includes(" run ") && command.includes(expectedConfigPath); }
+function processIsAlive(pid) { try { process.kill(Number(pid), 0); return true; } catch { return false; } }
+function findManagedProcess(expectedConfigPath) {
+  const candidates = [];
+  try { candidates.push(fs.readFileSync(pidPath(), "utf8").trim()); } catch {}
+  try { candidates.push(...fs.readdirSync("/proc").filter((entry) => /^\d+$/.test(entry))); } catch {}
+  for (const candidate of [...new Set(candidates)]) {
+    const pid = Number(candidate);
+    if (Number.isInteger(pid) && pid > 0 && processIsAlive(pid) && isManagedProcess(pid, expectedConfigPath)) return pid;
+  }
+  try { fs.unlinkSync(pidPath()); } catch {}
+  return null;
+}
+function writePidFile(pid) { fs.writeFileSync(pidPath(), `${pid}\n`, { mode: 0o600 }); }
+function clearPidFile(pid) { try { if (!pid || fs.readFileSync(pidPath(), "utf8").trim() === String(pid)) fs.unlinkSync(pidPath()); } catch {} }
+function formatSingBoxStartupError(stderr, fallback) { const detail = String(stderr || "").trim(); return detail || String(fallback || "sing-box failed to start"); }
 function toOutbound(node) {
   if (node.outbound && typeof node.outbound === "object") {
     const outbound = { ...node.outbound, tag: node.id };
@@ -104,8 +122,8 @@ async function buildConfig() {
 }
 
 function canConnect(port) { return new Promise((resolve) => { const socket = net.createConnection({ host: "127.0.0.1", port }); const finish = (value) => { socket.destroy(); resolve(value); }; socket.once("connect", () => finish(true)); socket.once("error", () => finish(false)); socket.setTimeout(250, () => finish(false)); }); }
-async function waitForPort(port, child, timeoutMs = 10000) { const deadline = Date.now() + timeoutMs; while (Date.now() < deadline) { if (await canConnect(port)) return; if (child.exitCode !== null) throw new Error(`sing-box exited with code ${child.exitCode ?? "unknown"}`); await new Promise((resolve) => setTimeout(resolve, 100)); } throw new Error(`sing-box did not listen on 127.0.0.1:${port}`); }
-async function stopChild(child) { if (!child || child.exitCode !== null) return; await new Promise((resolve) => { const timer = setTimeout(() => { child.kill("SIGKILL"); resolve(); }, 2000); child.once("exit", () => { clearTimeout(timer); resolve(); }); child.kill("SIGTERM"); }); }
+async function waitForPort(port, child, timeoutMs = 10000) { const deadline = Date.now() + timeoutMs; while (Date.now() < deadline) { if (await canConnect(port)) return; if (child.exitCode !== null) throw new Error(formatSingBoxStartupError(child.stderrText, `sing-box exited with code ${child.exitCode ?? "unknown"}`)); await new Promise((resolve) => setTimeout(resolve, 100)); } throw new Error(formatSingBoxStartupError(child.stderrText, `sing-box did not listen on 127.0.0.1:${port}`)); }
+async function stopChild(child) { if (!child || child.exitCode !== null) return; if (child.adopted) { try { process.kill(child.pid, "SIGTERM"); } catch {} child.killed = true; child.exitCode = 0; clearPidFile(child.pid); return; } await new Promise((resolve) => { const timer = setTimeout(() => { child.kill("SIGKILL"); resolve(); }, 2000); child.once("exit", () => { clearTimeout(timer); resolve(); }); child.kill("SIGTERM"); }); }
 function setRunningLocalProxyNode(nodeId) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ name: nodeId });
@@ -162,15 +180,28 @@ export async function startLocalProxy() {
   const binaryPath = executable();
   if (!binaryPath) throw missingExecutableError();
   const config = await buildConfig();
+  const existingPid = findManagedProcess(config.path);
+  if (existingPid) {
+    state.process = { adopted: true, pid: existingPid, exitCode: null, killed: false };
+    state.pid = existingPid;
+    state.startedAt = null;
+    state.lastError = null;
+    await waitForPort(config.port, state.process);
+    await waitForPort(CONTROLLER_PORT, state.process, 3000);
+    applyOutboundProxyEnv({ outboundProxyEnabled: true, outboundProxyUrl: `http://127.0.0.1:${config.port}`, outboundNoProxy: "127.0.0.1,localhost" });
+    return getLocalProxyStatus();
+  }
   const child = spawn(binaryPath, ["run", "-c", config.path], { detached: false, stdio: ["ignore", "pipe", "pipe"] });
+  child.stderrText = "";
   state.process = child; state.pid = child.pid; state.startedAt = new Date().toISOString(); state.lastError = null;
-  child.on("error", (error) => { state.lastError = `Unable to start sing-box: ${error.message}`; state.process = null; state.pid = null; applyOutboundProxyEnv({ outboundProxyEnabled: false }); });
-  child.stderr.on("data", (chunk) => { state.lastError = String(chunk).trim().slice(-1000); });
-  child.on("exit", (code) => { if (state.process === child) { state.process = null; state.pid = null; if (code !== 0) state.lastError = `sing-box exited with code ${code ?? "unknown"}`; } });
-  try { await waitForPort(config.port, child); await waitForPort(CONTROLLER_PORT, child, 3000); } catch (error) { await stopChild(child); state.process = null; state.pid = null; state.lastError = error.message; throw error; }
+  writePidFile(child.pid);
+  child.on("error", (error) => { state.lastError = `Unable to start sing-box: ${error.message}`; state.process = null; state.pid = null; clearPidFile(child.pid); applyOutboundProxyEnv({ outboundProxyEnabled: false }); });
+  child.stderr.on("data", (chunk) => { child.stderrText = `${child.stderrText}${String(chunk)}`.slice(-2000); state.lastError = child.stderrText.trim(); });
+  child.on("exit", (code) => { clearPidFile(child.pid); if (state.process === child) { state.process = null; state.pid = null; if (code !== 0 && !state.lastError) state.lastError = formatSingBoxStartupError(child.stderrText, `sing-box exited with code ${code ?? "unknown"}`); } });
+  try { await waitForPort(config.port, child); await waitForPort(CONTROLLER_PORT, child, 3000); } catch (error) { await stopChild(child); state.process = null; state.pid = null; state.lastError = formatSingBoxStartupError(child.stderrText, error.message); clearPidFile(child.pid); throw new Error(state.lastError); }
   applyOutboundProxyEnv({ outboundProxyEnabled: true, outboundProxyUrl: `http://127.0.0.1:${config.port}`, outboundNoProxy: "127.0.0.1,localhost" }); return getLocalProxyStatus();
 }
-export async function stopLocalProxy() { await stopChild(state.process); state.process = null; state.pid = null; applyOutboundProxyEnv({ outboundProxyEnabled: false }); return getLocalProxyStatus(); }
+export async function stopLocalProxy() { await stopChild(state.process); state.process = null; state.pid = null; clearPidFile(); applyOutboundProxyEnv({ outboundProxyEnabled: false }); return getLocalProxyStatus(); }
 export async function rebuildLocalProxyConfig() { const config = await buildConfig(); return { ...config, json: fs.readFileSync(config.path, "utf8") }; }
 
 export async function checkLocalProxyNode(nodeId, { testUrl = HEALTH_URL } = {}) {

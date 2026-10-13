@@ -53,6 +53,25 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe("sing-box startup diagnostics", () => {
+  it("preserves the runtime stderr when sing-box exits before binding", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const fakeBinary = "/tmp/9router-failover-test/sing-box-fails";
+    fs.mkdirSync(path.dirname(fakeBinary), { recursive: true });
+    fs.writeFileSync(fakeBinary, "#!/bin/sh\necho 'FATAL start inbound: bind: address already in use' >&2\nexit 1\n", { mode: 0o700 });
+    vi.resetModules();
+    vi.stubEnv("SING_BOX_BIN", fakeBinary);
+    delete globalThis.__nineRouterLocalProxyState;
+    mocks.getLocalProxyNodes.mockResolvedValue([nodes.a]);
+    const manager = await import("../../src/lib/network/localProxyManager.js");
+
+    await expect(manager.startLocalProxy()).rejects.toThrow("address already in use");
+    expect(globalThis.__nineRouterLocalProxyState.lastError).toContain("address already in use");
+    fs.rmSync(fakeBinary, { force: true });
+  });
+});
+
 describe("synthetic Local Proxy request failover", () => {
   it("switches from failed node A to healthy node B and records evidence", async () => {
     await loadManager("node-a", [nodes.a, nodes.b]);
