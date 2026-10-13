@@ -210,7 +210,7 @@ async function failoverLocalProxyNode(errorMessage, excludedNodeIds = [], contex
     }
     const previousNodeId = state.selectedNodeId;
     try {
-      await selectLocalProxyNode(candidates[0].id, { restart: false });
+      await selectLocalProxyNode(candidates[0].id);
       if (previousNodeId) await updateLocalProxyNode(previousNodeId, { healthStatus: "degraded", lastError: errorMessage });
       const evidence = recordRequestFailoverEvidence(context, previousNodeId, candidates[0].id, true, errorMessage);
       return { switched: true, nodeId: candidates[0].id, evidence };

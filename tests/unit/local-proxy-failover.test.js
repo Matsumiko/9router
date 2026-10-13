@@ -28,6 +28,7 @@ vi.mock("@/lib/localDb", () => ({
 }));
 vi.mock("@/lib/network/connectionProxy", () => ({
   resolveConnectionProxyConfig: mocks.resolveConnectionProxyConfig,
+  resolveProviderConnectionProxyConfig: mocks.resolveConnectionProxyConfig,
 }));
 vi.mock("@/lib/network/outboundProxy", () => ({ applyOutboundProxyEnv: vi.fn() }));
 vi.mock("@/lib/network/proxyTest.js", () => ({ testProxyUrl: mocks.testProxyUrl }));
@@ -72,6 +73,60 @@ describe("sing-box startup diagnostics", () => {
     fs.rmSync(fakeBinary, { force: true });
   });
 });
+  it("rebuilds the sidecar when the running selector lacks the failover candidate", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const fakeBinary = "/tmp/9router-failover-test/proxy-selector-stale";
+    const marker = "/tmp/9router-failover-test/selector-restarted";
+    fs.mkdirSync(path.dirname(fakeBinary), { recursive: true });
+    fs.rmSync(marker, { force: true });
+    fs.writeFileSync(fakeBinary, `#!/usr/bin/env node
+const fs = require("node:fs");
+const http = require("node:http");
+const net = require("node:net");
+const marker = ${JSON.stringify(marker)};
+const restarted = fs.existsSync(marker);
+const inbound = net.createServer((socket) => socket.destroy());
+const controller = http.createServer((request, response) => {
+  if (request.method === "PUT" && !restarted) {
+    fs.writeFileSync(marker, "restarted");
+    response.writeHead(400, { "content-type": "application/json" });
+    response.end(JSON.stringify({ message: "Selector update error: not found" }));
+    return;
+  }
+  response.writeHead(204);
+  response.end();
+});
+inbound.listen(29129, "127.0.0.1");
+controller.listen(29130, "127.0.0.1");
+process.on("SIGTERM", () => {
+  inbound.close();
+  controller.close(() => process.exit(0));
+});
+`, { mode: 0o700 });
+
+    vi.resetModules();
+    vi.stubEnv("SING_BOX_BIN", fakeBinary);
+    vi.stubEnv("NINE_ROUTER_LOCAL_PROXY_PORT", "29129");
+    vi.stubEnv("NINE_ROUTER_LOCAL_PROXY_CONTROLLER_PORT", "29130");
+    mocks.getLocalProxyNodes.mockResolvedValue([nodes.a, nodes.b]);
+    mocks.getLocalProxyNodeById.mockImplementation(async (id) => [nodes.a, nodes.b].find((node) => node.id === id) || null);
+    const manager = await import("../../src/lib/network/localProxyManager.js");
+    globalThis.__nineRouterLocalProxyState.selectedNodeId = "node-a";
+
+    try {
+      await manager.startLocalProxy();
+      const result = await globalThis.__nineRouterRequestProxyFailover("selector is stale", ["node-a"], { target: "https://upstream.test", attempt: 1, phase: "tcp_connect", directFallbackAllowed: false });
+
+      expect(result).toMatchObject({ switched: true, nodeId: "node-b" });
+      expect(globalThis.__nineRouterLocalProxyState.selectedNodeId).toBe("node-b");
+      expect(fs.existsSync(marker)).toBe(true);
+    } finally {
+      await manager.stopLocalProxy();
+      fs.rmSync(fakeBinary, { force: true });
+      fs.rmSync(marker, { force: true });
+    }
+  });
 
 describe("synthetic Local Proxy request failover", () => {
   it("switches from failed node A to healthy node B and records evidence", async () => {
