@@ -10,7 +10,7 @@ import { testProxyUrl } from "@/lib/network/proxyTest.js";
 import { assertPublicUrlResolved } from "@/shared/utils/ssrfGuard.js";
 import { getRuntimeFingerprint } from "@/lib/runtimeFingerprint.js";
 const DEFAULT_PORT = 20129;
-const HEALTH_URL = process.env.NINE_ROUTER_PROXY_TEST_URL || "https://www.gstatic.com/generate_204";
+const HEALTH_URL = process.env.NINE_ROUTER_PROXY_TEST_URL || "http://cp.cloudflare.com/";
 const CONTROLLER_PORT = Number(process.env.NINE_ROUTER_LOCAL_PROXY_CONTROLLER_PORT) || 20130;
 const state = globalThis.__nineRouterLocalProxyState || { process: null, pid: null, lastError: null, startedAt: null, selectedNodeId: null, rotationCursor: -1, requestFailoverPromise: null };
 globalThis.__nineRouterLocalProxyState = state;
@@ -50,14 +50,18 @@ function executable() {
   const configured = process.env.SING_BOX_BIN || process.env.SINGBOX_BIN;
   const candidates = [];
   if (configured) candidates.push(configured);
-  for (const directory of String(process.env.PATH || "").split(path.delimiter).filter(Boolean)) candidates.push(path.join(directory, "sing-box"));
-  if (process.env.HOME) candidates.push(path.join(process.env.HOME, ".local", "bin", "sing-box"));
-  candidates.push("/usr/local/bin/sing-box", "/usr/bin/sing-box", "/bin/sing-box");
+  for (const directory of String(process.env.PATH || "").split(path.delimiter).filter(Boolean)) {
+    candidates.push(path.join(directory, "sing-box"), path.join(directory, "nekobox_core"));
+  }
+  if (process.env.HOME) {
+    candidates.push(path.join(process.env.HOME, ".local", "bin", "sing-box"), path.join(process.env.HOME, ".local", "bin", "nekobox_core"));
+  }
+  candidates.push("/usr/local/bin/sing-box", "/usr/local/bin/nekobox_core", "/usr/bin/sing-box", "/usr/bin/nekobox_core", "/bin/sing-box", "/bin/nekobox_core");
   return candidates.find((candidate) => isExecutable(candidate)) || null;
 }
 function missingExecutableError() { return new Error("sing-box binary not found. Install sing-box or set SING_BOX_BIN to its executable path."); }
 function processCommandLine(pid) { try { return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").replaceAll("\0", " "); } catch { return ""; } }
-function isManagedProcess(pid, expectedConfigPath) { const command = processCommandLine(pid); return command.includes("sing-box") && command.includes(" run ") && command.includes(expectedConfigPath); }
+function isManagedProcess(pid, expectedConfigPath) { const command = processCommandLine(pid); return /(sing-box|nekobox_core)/.test(command) && command.includes(" run ") && command.includes(expectedConfigPath); }
 function processIsAlive(pid) { try { process.kill(Number(pid), 0); return true; } catch { return false; } }
 function findManagedProcess(expectedConfigPath) {
   const candidates = [];
@@ -112,7 +116,7 @@ function toOutbound(node) {
   }
   if (node.type === "vless") {
     const params = node.params || {};
-    return { ...base, uuid: node.uuid, flow: params.flow && params.flow !== "none" ? params.flow.replace(/-udp443$/, "") : undefined, ...buildStreamSettings(params, { defaultSni: node.server }) };
+    return { ...base, uuid: node.uuid, packet_encoding: params.packetEncoding || "xudp", flow: params.flow && params.flow !== "none" ? params.flow.replace(/-udp443$/, "") : "", ...buildStreamSettings(params, { defaultSni: node.server }) };
   }
   if (node.type === "trojan") return { ...base, password: node.password, ...buildStreamSettings(node.params || {}, { tlsEnabled: true, defaultSni: node.server }) };
   if (["http", "https"].includes(node.type)) return { ...base, type: "http", username: node.username || undefined, password: node.password || undefined, ...(node.type === "https" ? { tls: { enabled: true, server_name: node.server } } : {}) };
@@ -120,17 +124,38 @@ function toOutbound(node) {
   return null;
 }
 
+function buildProxyDnsConfig(relayDomains, detourTag) {
+  return {
+    final: "dns-remote",
+    rules: relayDomains.length ? [{ action: "route", domain: relayDomains, server: "dns-direct" }] : [],
+    servers: [
+      { type: "tls", tag: "dns-remote", server: "8.8.8.8", detour: detourTag, domain_resolver: "dns-local" },
+      { type: "local", tag: "dns-direct", domain_resolver: "dns-local" },
+      { type: "local", tag: "dns-local" },
+    ],
+  };
+}
+
 function render(config) {
   const outbounds = config.nodes.map(toOutbound).filter(Boolean);
   const nodeTags = outbounds.map((outbound) => outbound.tag);
   const selectedTag = nodeTags.includes(config.selectedNodeId) ? config.selectedNodeId : nodeTags[0];
+  const relayDomains = [...new Set(config.nodes.map((node) => node.server).filter(Boolean))];
   return JSON.stringify({
     log: { level: "warn" },
-    dns: { strategy: "ipv4_only" },
+    dns: buildProxyDnsConfig(relayDomains, "proxy-auto"),
     experimental: { clash_api: { external_controller: `127.0.0.1:${CONTROLLER_PORT}` } },
     inbounds: [{ type: "mixed", tag: "proxy-in", listen: "127.0.0.1", listen_port: config.port }],
     outbounds: [...outbounds, { type: "selector", tag: "proxy-auto", outbounds: nodeTags, default: selectedTag }, { type: "direct", tag: "direct" }],
-    route: { rules: [{ domain: ["oauth2.googleapis.com", "www.googleapis.com"], outbound: "direct" }], final: "proxy-auto" },
+    route: {
+      default_domain_resolver: { server: "dns-direct", strategy: "" },
+      rules: [
+        { action: "sniff", inbound: ["proxy-in"] },
+        { action: "hijack-dns", protocol: "dns" },
+        { domain: ["oauth2.googleapis.com", "www.googleapis.com"], outbound: "direct" },
+      ],
+      final: "proxy-auto",
+    },
   }, null, 2) + "\n";
 }
 
@@ -138,7 +163,9 @@ async function buildConfig() {
   const nodes = await getLocalProxyNodes({ enabledOnly: true });
   const supported = nodes.filter((node) => toOutbound(node));
   if (!supported.length) throw new Error("No enabled supported sing-box proxy nodes");
-  const selectedNodeId = state.selectedNodeId && supported.some((node) => node.id === state.selectedNodeId) ? state.selectedNodeId : supported[0].id;
+  const healthRank = (node) => node.healthStatus === "healthy" ? 0 : node.healthStatus === "degraded" ? 1 : node.healthStatus === "unknown" ? 2 : 3;
+  const preferred = [...supported].sort((left, right) => healthRank(left) - healthRank(right) || (Number(left.latencyMs) || 100000) - (Number(right.latencyMs) || 100000));
+  const selectedNodeId = state.selectedNodeId && supported.some((node) => node.id === state.selectedNodeId) ? state.selectedNodeId : preferred[0].id;
   state.selectedNodeId = selectedNodeId;
   const config = { port: listenPort(), nodes: supported, selectedNodeId };
   fs.writeFileSync(configPath(), render(config), { mode: 0o600 });
@@ -235,12 +262,12 @@ export async function checkLocalProxyNode(nodeId, { testUrl = HEALTH_URL } = {})
   const outbound = toOutbound(node); if (!outbound) throw new Error("Node type is not supported by sing-box");
   const port = await new Promise((resolve, reject) => { const server = net.createServer(); server.once("error", reject); server.listen(0, "127.0.0.1", () => { const value = server.address().port; server.close(() => resolve(value)); }); });
   const healthPath = path.join(directory(), `health-${node.id}.json`);
-  const healthConfig = { log: { level: "error" }, dns: { strategy: "ipv4_only" }, inbounds: [{ type: "mixed", tag: "proxy-in", listen: "127.0.0.1", listen_port: port }], outbounds: [outbound, { type: "direct", tag: "direct" }], route: { final: outbound.tag } };
+  const healthConfig = { log: { level: "error" }, dns: buildProxyDnsConfig([node.server], outbound.tag), inbounds: [{ type: "mixed", tag: "proxy-in", listen: "127.0.0.1", listen_port: port }], outbounds: [outbound, { type: "direct", tag: "direct" }], route: { default_domain_resolver: { server: "dns-direct", strategy: "" }, rules: [{ action: "sniff", inbound: ["proxy-in"] }, { action: "hijack-dns", protocol: "dns" }], final: outbound.tag } };
   fs.writeFileSync(healthPath, JSON.stringify(healthConfig, null, 2) + "\n", { mode: 0o600 });
   const started = Date.now(); let child; let stderr = "";
   try {
     child = spawn(executable(), ["run", "-c", healthPath], { stdio: ["ignore", "ignore", "pipe"] }); child.stderr.on("data", (chunk) => { stderr = (stderr + String(chunk)).slice(-1000); });
-    await waitForPort(port, child); const probe = await testProxyUrl({ proxyUrl: `http://127.0.0.1:${port}`, testUrl: targetUrl.toString(), timeoutMs: 8000 });
+    await waitForPort(port, child); const probe = await testProxyUrl({ proxyUrl: `http://127.0.0.1:${port}`, testUrl: targetUrl.toString(), timeoutMs: 15000 });
     const result = { healthStatus: probe.ok ? "healthy" : "degraded", latencyMs: Date.now() - started, lastCheckedAt: new Date().toISOString(), lastError: probe.ok ? null : probe.error || `Health URL returned HTTP ${probe.status}` };
     if (!probe.ok && stderr) result.lastError = `${result.lastError}: ${stderr.trim()}`.slice(0, 1000);
     return { ...await updateLocalProxyNode(nodeId, result), ...result, healthUrl: targetUrl.toString() };

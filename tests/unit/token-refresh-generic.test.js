@@ -102,6 +102,30 @@ describe("refreshAccessToken — config-driven profiles", () => {
     expect(fm).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("Google refresh proxy policy", () => {
+  beforeEach(() => { vi.clearAllMocks(); vi.resetModules(); global.fetch = originalFetch; });
+  afterEach(() => { global.fetch = originalFetch; });
+
+  it("uses proxyAwareFetch with the caller's bypass policy", async () => {
+    const proxyAwareFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ access_token: "google-access", expires_in: 3600 }),
+    });
+    vi.doMock("../../open-sse/utils/proxyFetch.js", () => ({ proxyAwareFetch }));
+    const { refreshGoogleToken } = await import("open-sse/services/tokenRefresh/providers.js");
+    const proxyOptions = { bypassLocalProxy: true, connectionProxyEnabled: false, connectionProxyUrl: "" };
+
+    await refreshGoogleToken("google-refresh", "client-id", "client-secret", console, proxyOptions);
+
+    expect(proxyAwareFetch).toHaveBeenCalledWith(
+      "https://oauth2.googleapis.com/token",
+      expect.objectContaining({ method: "POST" }),
+      proxyOptions,
+    );
+  });
+});
 describe("Cline refresh", () => {
   beforeEach(() => { vi.clearAllMocks(); vi.resetModules(); global.fetch = originalFetch; });
   afterEach(() => { global.fetch = originalFetch; });

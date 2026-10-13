@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   getProxySubscriptions: vi.fn(async () => []),
   getLocalProxyNodeById: vi.fn(),
   updateLocalProxyNode: vi.fn(),
+  deleteLocalProxyNodesByHealthStatus: vi.fn(),
 }));
 
 vi.mock("@/lib/dataDir", () => ({ DATA_DIR: "/tmp/9router-node-format-test", getDataDir: () => "/tmp/9router-node-format-test" }));
@@ -91,6 +92,8 @@ describe("local proxy node formats", () => {
     expect(outbound).toMatchObject({
       type: "vless",
       uuid: node.uuid,
+      packet_encoding: "xudp",
+      flow: "",
       transport: { type: "ws", path: "/socket", headers: { Host: "cdn.example.com" } },
       tls: {
         enabled: true,
@@ -127,5 +130,47 @@ describe("local proxy node formats", () => {
     expect(outbound.transport).toMatchObject({ type: "ws", path: "/socket", headers: { Host: "cdn.example.com" } });
     expect(outbound.tls).toMatchObject({ enabled: true, server_name: "tls.example.com" });
     expect(outbound.network).toBeUndefined();
+  });
+  it("defaults the selector to the healthiest enabled node", async () => {
+    mocks.getLocalProxyNodes.mockResolvedValue([
+      { id: "dead-node", type: "vless", name: "dead", server: "dead.example.com", port: 443, uuid: "11111111-1111-4111-8111-111111111111", params: { type: "ws", path: "/dead", host: "dead.example.com", security: "tls", sni: "dead.example.com" }, enabled: true, healthStatus: "unhealthy", latencyMs: 20 },
+      { id: "healthy-node", type: "vless", name: "healthy", server: "healthy.example.com", port: 443, uuid: "22222222-2222-4222-8222-222222222222", params: { type: "ws", path: "/healthy", host: "healthy.example.com", security: "tls", sni: "healthy.example.com" }, enabled: true, healthStatus: "healthy", latencyMs: 100 },
+    ]);
+    const manager = await import("../../src/lib/network/localProxyManager.js");
+    const config = JSON.parse((await manager.rebuildLocalProxyConfig()).json);
+
+    expect(config.outbounds.find((entry) => entry.tag === "proxy-auto").default).toBe("healthy-node");
+  });
+  it("routes relay DNS directly and resolves target DNS through the selected proxy", async () => {
+    mocks.getLocalProxyNodes.mockResolvedValue([
+      { id: "relay-node", type: "vless", name: "relay", server: "relay.example.com", port: 443, uuid: "33333333-3333-4333-8333-333333333333", params: { type: "ws", path: "/relay", host: "relay.example.com", security: "tls", sni: "relay.example.com" }, enabled: true, healthStatus: "healthy", latencyMs: 10 },
+    ]);
+    const manager = await import("../../src/lib/network/localProxyManager.js");
+    const config = JSON.parse((await manager.rebuildLocalProxyConfig()).json);
+
+    expect(config.dns).toMatchObject({ final: "dns-remote" });
+    expect(config.dns.rules).toContainEqual({ action: "route", domain: ["relay.example.com"], server: "dns-direct" });
+    expect(config.dns.servers).toContainEqual({ type: "tls", tag: "dns-remote", server: "8.8.8.8", detour: "proxy-auto", domain_resolver: "dns-local" });
+    expect(config.route.default_domain_resolver).toEqual({ server: "dns-direct", strategy: "" });
+    expect(config.route.rules).toContainEqual({ action: "sniff", inbound: ["proxy-in"] });
+    expect(config.route.rules).toContainEqual({ action: "hijack-dns", protocol: "dns" });
+  });
+});
+
+describe("local proxy degraded-node cleanup", () => {
+  it("deletes only degraded nodes through the explicit bulk endpoint", async () => {
+    mocks.deleteLocalProxyNodesByHealthStatus.mockResolvedValue([{ id: "node-a", healthStatus: "degraded" }]);
+    const { DELETE } = await import("../../src/app/api/local-proxy/nodes/route.js");
+    const response = await DELETE(new Request("http://localhost/api/local-proxy/nodes", { method: "DELETE", body: JSON.stringify({ healthStatus: "degraded", subscriptionId: "sub-1" }), headers: { "Content-Type": "application/json" } }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ success: true, deletedNodes: 1 });
+    expect(mocks.deleteLocalProxyNodesByHealthStatus).toHaveBeenCalledWith("degraded", { subscriptionId: "sub-1" });
+  });
+
+  it("rejects bulk deletion of non-degraded statuses", async () => {
+    const { DELETE } = await import("../../src/app/api/local-proxy/nodes/route.js");
+    const response = await DELETE(new Request("http://localhost/api/local-proxy/nodes", { method: "DELETE", body: JSON.stringify({ healthStatus: "healthy" }), headers: { "Content-Type": "application/json" } }));
+    expect(response.status).toBe(400);
+    expect(mocks.deleteLocalProxyNodesByHealthStatus).not.toHaveBeenCalled();
   });
 });

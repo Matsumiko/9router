@@ -18,7 +18,7 @@ import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
 import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
-import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
+import { resolveProviderConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
 
 // Qoder shares one live resolver across intl (qoder) and CN (qoder-cn); the
@@ -112,7 +112,7 @@ const LIVE_MODEL_RESOLVERS = {
     return result?.models?.length ? { models: result.models } : null;
   },
   "grok-cli": async (conn) => {
-    const proxy = await resolveConnectionProxyConfig(conn.providerSpecificData || {});
+    const proxy = await resolveProviderConnectionProxyConfig(conn.provider, conn.providerSpecificData || {});
     const result = await resolveGrokCliModels({
       ...conn,
       connectionId: conn.id,
@@ -123,6 +123,7 @@ const LIVE_MODEL_RESOLVERS = {
         connectionProxyUrl: proxy.connectionProxyUrl || "",
         connectionNoProxy: proxy.connectionNoProxy || "",
         vercelRelayUrl: proxy.vercelRelayUrl || "",
+        bypassLocalProxy: proxy.bypassLocalProxy === true,
         strictProxy: proxy.strictProxy === true,
       },
       onCredentialsRefreshed: async (refreshed) => {

@@ -1,5 +1,5 @@
 import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools } from "@/lib/localDb";
-import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
+import { resolveProviderConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
@@ -54,7 +54,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         const poolIds = allPools.filter(p => p.proxyUrl).map(p => p.id);
         pickedId = pickProxyPoolId(poolIds, strategy, providerId);
       }
-      const resolvedProxy = await resolveConnectionProxyConfig({ proxyPoolId: pickedId || "" });
+      const resolvedProxy = await resolveProviderConnectionProxyConfig(providerId, { proxyPoolId: pickedId || "" });
       return {
         id: "noauth",
         connectionName: "Public",
@@ -198,7 +198,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       connection = availableConnections[0];
     }
 
-    const resolvedProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});
+    const resolvedProxy = await resolveProviderConnectionProxyConfig(providerId, connection.providerSpecificData || {});
 
     return {
       authType: connection.authType,
@@ -219,6 +219,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         connectionNoProxy: resolvedProxy.connectionNoProxy,
         connectionProxyPoolId: resolvedProxy.proxyPoolId || null,
         vercelRelayUrl: resolvedProxy.vercelRelayUrl || "",
+        bypassLocalProxy: resolvedProxy.bypassLocalProxy === true,
       },
       connectionId: connection.id,
       // Include current status for optimization check

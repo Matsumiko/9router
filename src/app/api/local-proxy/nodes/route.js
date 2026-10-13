@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createLocalProxyNode, getLocalProxyNodes } from "@/lib/db/index.js";
+import { createLocalProxyNode, deleteLocalProxyNodesByHealthStatus, getLocalProxyNodes } from "@/lib/db/index.js";
 import { parseSubscriptionText } from "@/lib/db/repos/proxySubscriptionsRepo.js";
 import { checkLocalProxyNode } from "@/lib/network/localProxyManager.js";
 
@@ -25,4 +25,11 @@ export async function POST(request) {
   const imported = [];
   for (const node of nodes) imported.push(await createLocalProxyNode({ ...node, subscriptionId: null }));
   return NextResponse.json({ nodes: imported, importedNodes: imported.length, rejectedLines: lines.length - nodes.length }, { status: 201 });
+}
+export async function DELETE(request) {
+  const body = await request.json().catch(() => ({}));
+  const healthStatus = body.healthStatus || "degraded";
+  if (healthStatus !== "degraded") return NextResponse.json({ error: "Only degraded nodes can be bulk deleted" }, { status: 400 });
+  const removed = await deleteLocalProxyNodesByHealthStatus(healthStatus, { subscriptionId: body.subscriptionId || undefined });
+  return NextResponse.json({ success: true, deletedNodes: removed.length, nodes: removed });
 }

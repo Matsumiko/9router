@@ -4,7 +4,7 @@ import { checkLocalProxyNode, selectLocalProxyNode } from "@/lib/network/localPr
 
 const DEFAULT_INTERVAL_MINUTES = 15;
 const DEFAULT_ROTATION_INTERVAL_MINUTES = 30;
-const DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204";
+const DEFAULT_TEST_URL = "http://cp.cloudflare.com/";
 const MAX_CONCURRENCY = 4;
 const FAILOVER_THRESHOLD = 3;
 const FAILOVER_COOLDOWN_MS = 5 * 60 * 1000;

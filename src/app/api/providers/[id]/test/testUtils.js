@@ -1,5 +1,5 @@
 import { getProviderConnectionById, updateProviderConnection } from "@/lib/localDb";
-import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
+import { resolveProviderConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { testProxyUrl } from "@/lib/network/proxyTest";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS } from "@/shared/constants/providers";
 import { getDefaultModel } from "open-sse/config/providerModels.js";
@@ -483,11 +483,11 @@ async function fetchWithConnectionProxy(url, options = {}, effectiveProxy = null
     options.signal = AbortSignal.timeout(15000);
   }
 
-  // Vercel relay: forward via relay URL
   if (effectiveProxy?.vercelRelayUrl) {
     const { proxyAwareFetch } = await import("open-sse/utils/proxyFetch.js");
     return proxyAwareFetch(url, options, {
       vercelRelayUrl: effectiveProxy.vercelRelayUrl,
+      bypassLocalProxy: effectiveProxy.bypassLocalProxy === true,
     });
   }
 
@@ -500,6 +500,7 @@ async function fetchWithConnectionProxy(url, options = {}, effectiveProxy = null
     connectionProxyEnabled: true,
     connectionProxyUrl: effectiveProxy.connectionProxyUrl,
     connectionNoProxy: effectiveProxy.connectionNoProxy || "",
+    bypassLocalProxy: effectiveProxy.bypassLocalProxy === true,
   });
 }
 
@@ -895,7 +896,7 @@ export async function testSingleConnection(id) {
   const connection = await getProviderConnectionById(id);
   if (!connection) return { valid: false, error: "Connection not found", latencyMs: 0, testedAt: new Date().toISOString() };
 
-  const effectiveProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});
+  const effectiveProxy = await resolveProviderConnectionProxyConfig(connection.provider, connection.providerSpecificData || {});
 
   if (effectiveProxy.connectionProxyEnabled && effectiveProxy.connectionProxyUrl && !effectiveProxy.vercelRelayUrl && !isLocalSidecarProxyUrl(effectiveProxy.connectionProxyUrl)) {
     const proxyResult = await testProxyUrl({ proxyUrl: effectiveProxy.connectionProxyUrl });

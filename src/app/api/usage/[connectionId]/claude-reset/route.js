@@ -3,7 +3,7 @@ import "open-sse/index.js";
 
 import { getProviderConnectionById } from "@/lib/localDb";
 import { consumeClaudeResetGrant } from "open-sse/services/usage.js";
-import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
+import { resolveProviderConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { refreshAndUpdateCredentials } from "../route.js";
 
 // Spend one free Claude "limit reset" grant (irreversible)
@@ -18,12 +18,13 @@ export async function POST(request, { params }) {
       return Response.json({ error: "Limit reset is only available for Claude OAuth connections." }, { status: 400 });
     }
 
-    const proxyConfig = await resolveConnectionProxyConfig(connection.providerSpecificData);
+    const proxyConfig = await resolveProviderConnectionProxyConfig(connection.provider, connection.providerSpecificData);
     const proxyOptions = {
       connectionProxyEnabled: proxyConfig.connectionProxyEnabled === true,
       connectionProxyUrl: proxyConfig.connectionProxyUrl || "",
       connectionNoProxy: proxyConfig.connectionNoProxy || "",
       vercelRelayUrl: proxyConfig.vercelRelayUrl || "",
+      bypassLocalProxy: proxyConfig.bypassLocalProxy === true,
       strictProxy: false,
     };
 

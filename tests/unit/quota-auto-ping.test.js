@@ -9,7 +9,7 @@ vi.mock("@/lib/localDb", () => ({
 }));
 
 vi.mock("@/lib/network/connectionProxy", () => ({
-  resolveConnectionProxyConfig: vi.fn(),
+  resolveProviderConnectionProxyConfig: vi.fn(),
 }));
 
 vi.mock("@/app/api/usage/[connectionId]/route.js", () => ({
@@ -95,7 +95,7 @@ describe("quota auto-ping", () => {
       getSettings: vi.fn(),
       getProviderConnections: vi.fn(),
       updateProviderConnection: vi.fn(),
-      resolveConnectionProxyConfig: vi.fn().mockResolvedValue({}),
+      resolveProviderConnectionProxyConfig: vi.fn().mockResolvedValue({}),
       refreshAndUpdateCredentials: vi.fn(async (connection) => ({ connection, refreshed: false })),
       proxyAwareFetch: vi.fn().mockResolvedValue({ ok: true }),
       getExecutor: vi.fn(() => ({

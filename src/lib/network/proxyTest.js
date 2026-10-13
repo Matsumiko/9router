@@ -1,6 +1,6 @@
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 
-const DEFAULT_TEST_URL = "https://google.com/";
+const DEFAULT_TEST_URL = "http://cp.cloudflare.com/";
 const DEFAULT_TIMEOUT_MS = 8000;
 
 function getErrorMessage(err) {
@@ -57,21 +57,25 @@ export async function testProxyUrl({ proxyUrl, testUrl, timeoutMs } = {}) {
 
     try {
       const res = await undiciFetch(normalizedTestUrl, {
-        method: "HEAD",
+        method: "GET",
         dispatcher,
         signal: controller.signal,
         headers: {
           "User-Agent": "9Router",
         },
       });
+      try { await res.body?.cancel?.(); } catch { /* response body is irrelevant to reachability */ }
 
       return {
-        ok: res.ok,
+        // NekoBox treats any completed HTTP response as a live proxy. The
+        // health probe measures transport reachability, not target semantics.
+        ok: true,
         status: res.status,
         statusText: res.statusText,
         url: normalizedTestUrl,
         elapsedMs: Date.now() - startedAt,
       };
+
     } catch (err) {
       const message =
         err?.name === "AbortError"

@@ -3,6 +3,9 @@ import { OAUTH_ENDPOINTS, GITHUB_COPILOT, buildKimiHeaders } from "../../config/
 import { proxyAwareFetch } from "../../utils/proxyFetch.js";
 import { dedupRefresh } from "./dedup.js";
 import { buildExternalIdpRefreshParams } from "../../../src/lib/oauth/kiroExternalIdp.js";
+function fetchWithOptionalProxy(url, options, proxyOptions) {
+  return proxyOptions ? proxyAwareFetch(url, options, proxyOptions) : fetch(url, options);
+}
 
 let _xaiServiceSingleton = null;
 export async function refreshXaiToken(refreshToken, log) {
@@ -82,7 +85,7 @@ function buildRefreshBody(profile, config, refreshToken) {
   return { format: "form", body: new URLSearchParams(payload) };
 }
 
-export async function refreshAccessToken(provider, refreshToken, credentials, log) {
+export async function refreshAccessToken(provider, refreshToken, credentials, log, proxyOptions = null) {
   const config = PROVIDERS[provider];
   const profile = REFRESH_PROFILES[provider] || {};
   const url = resolveRefreshUrl(provider, config, profile);
@@ -107,7 +110,7 @@ export async function refreshAccessToken(provider, refreshToken, credentials, lo
       Accept: "application/json",
       ...(profile.extraHeaders ? (profile.extraHeaders(credentials, config) || {}) : {}),
     };
-    const response = await fetch(url, { method: "POST", headers, body });
+    const response = await proxyAwareFetch(url, { method: "POST", headers, body }, proxyOptions);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -143,16 +146,16 @@ export async function refreshAccessToken(provider, refreshToken, credentials, lo
 
 // CLIProxyAPI DeviceFlowClient.RefreshToken: form body (no client_secret) + X-Msh-* headers
 // Delegate to refreshAccessToken("kimi", ...) — profile carries the X-Msh headers.
-export async function refreshKimiToken(refreshToken, credentials, log) {
-  return refreshAccessToken("kimi", refreshToken, credentials, log);
+export async function refreshKimiToken(refreshToken, credentials, log, proxyOptions = null) {
+  return refreshAccessToken("kimi", refreshToken, credentials, log, proxyOptions);
 }
 
-export async function refreshClineToken(refreshToken, log) {
+export async function refreshClineToken(refreshToken, log, proxyOptions = null) {
   if (!refreshToken) return null;
 
   return dedupRefresh("cline", refreshToken, async () => {
     try {
-      const response = await fetch(PROVIDERS.cline?.refreshUrl, {
+      const response = await fetchWithOptionalProxy(PROVIDERS.cline?.refreshUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -163,7 +166,7 @@ export async function refreshClineToken(refreshToken, log) {
           grantType: "refresh_token",
           clientType: "extension",
         }),
-      });
+      }, proxyOptions);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -195,15 +198,15 @@ export async function refreshClineToken(refreshToken, log) {
 }
 
 // Claude OAuth: JSON body, client_id only. Delegate to refreshAccessToken("claude", ...).
-export async function refreshClaudeOAuthToken(refreshToken, log) {
-  return refreshAccessToken("claude", refreshToken, {}, log);
+export async function refreshClaudeOAuthToken(refreshToken, log, proxyOptions = null) {
+  return refreshAccessToken("claude", refreshToken, {}, log, proxyOptions);
 }
 
-export async function refreshGoogleToken(refreshToken, clientId, clientSecret, log) {
+export async function refreshGoogleToken(refreshToken, clientId, clientSecret, log, proxyOptions = null) {
   if (!refreshToken) return null;
   return dedupRefresh(`google:${clientId}`, refreshToken, async () => {
   try {
-    const response = await fetch(OAUTH_ENDPOINTS.google.token, {
+    const response = await proxyAwareFetch(OAUTH_ENDPOINTS.google.token, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -215,7 +218,7 @@ export async function refreshGoogleToken(refreshToken, clientId, clientSecret, l
         client_id: clientId,
         client_secret: clientSecret,
       }),
-    });
+    }, proxyOptions);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -254,11 +257,11 @@ export function classifyOAuthRefreshError(errorText = "", status = 0) {
   return { status, code, description, permanent };
 }
 
-export async function refreshCodexToken(refreshToken, log) {
+export async function refreshCodexToken(refreshToken, log, proxyOptions = null) {
   if (!refreshToken) return null;
   return dedupRefresh("codex", refreshToken, async () => {
     try {
-      const response = await fetch(OAUTH_ENDPOINTS.openai.token, {
+      const response = await fetchWithOptionalProxy(OAUTH_ENDPOINTS.openai.token, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -269,7 +272,7 @@ export async function refreshCodexToken(refreshToken, log) {
           grant_type: "refresh_token",
           refresh_token: refreshToken,
         }),
-      });
+      }, proxyOptions);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -456,67 +459,54 @@ export async function refreshKiroToken(refreshToken, providerSpecificData, log, 
 }
 
 // iFlow: Basic Auth + client_id+client_secret in body. Delegate to refreshAccessToken("iflow", ...).
-export async function refreshIflowToken(refreshToken, log) {
-  return refreshAccessToken("iflow", refreshToken, {}, log);
+export async function refreshIflowToken(refreshToken, log, proxyOptions = null) {
+  return refreshAccessToken("iflow", refreshToken, {}, log, proxyOptions);
 }
 
 // GitHub: optional client_secret. Delegate to refreshAccessToken("github", ...).
-export async function refreshGitHubToken(refreshToken, log) {
-  return refreshAccessToken("github", refreshToken, {}, log);
+export async function refreshGitHubToken(refreshToken, log, proxyOptions = null) {
+  return refreshAccessToken("github", refreshToken, {}, log, proxyOptions);
 }
 
-export async function refreshCopilotToken(githubAccessToken, log) {
+export async function refreshCopilotToken(githubAccessToken, log, proxyOptions = null) {
   if (!githubAccessToken) return null;
   return dedupRefresh("copilot", githubAccessToken, async () => {
-  try {
-    const response = await fetch(PROVIDER_OAUTH["github"]?.copilotTokenUrl, {
-      headers: {
-        "Authorization": `token ${githubAccessToken}`,
-        "User-Agent": GITHUB_COPILOT.USER_AGENT,
-        "Editor-Version": `vscode/${GITHUB_COPILOT.VSCODE_VERSION}`,
-        "Editor-Plugin-Version": `copilot-chat/${GITHUB_COPILOT.COPILOT_CHAT_VERSION}`,
-        "Accept": "application/json",
-        "x-github-api-version": GITHUB_COPILOT.API_VERSION
-      }
-    });
+    try {
+      const response = await proxyAwareFetch(PROVIDER_OAUTH["github"]?.copilotTokenUrl, {
+        headers: {
+          "Authorization": `token ${githubAccessToken}`,
+          "User-Agent": GITHUB_COPILOT.USER_AGENT,
+          "Editor-Version": `vscode/${GITHUB_COPILOT.VSCODE_VERSION}`,
+          "Editor-Plugin-Version": `copilot-chat/${GITHUB_COPILOT.COPILOT_CHAT_VERSION}`,
+          "Accept": "application/json",
+          "x-github-api-version": GITHUB_COPILOT.API_VERSION
+        }
+      }, proxyOptions);
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      log?.error?.("TOKEN_REFRESH", "Failed to refresh Copilot token", {
-        status: response.status,
-        error: errorText
-      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        log?.error?.("TOKEN_REFRESH", "Failed to refresh Copilot token", { status: response.status, error: errorText });
+        return null;
+      }
+
+      const data = await response.json();
+      log?.info?.("TOKEN_REFRESH", "Successfully refreshed Copilot token", { hasToken: !!data.token, expiresAt: data.expires_at });
+      return { token: data.token, expiresAt: data.expires_at };
+    } catch (error) {
+      log?.error?.("TOKEN_REFRESH", "Error refreshing Copilot token", { error: error.message });
       return null;
     }
-
-    const data = await response.json();
-
-    log?.info?.("TOKEN_REFRESH", "Successfully refreshed Copilot token", {
-      hasToken: !!data.token,
-      expiresAt: data.expires_at
-    });
-
-    return {
-      token: data.token,
-      expiresAt: data.expires_at
-    };
-  } catch (error) {
-    log?.error?.("TOKEN_REFRESH", "Error refreshing Copilot token", {
-      error: error.message
-    });
-    return null;
-  }
   }, log);
 }
 
 // CodeBuddy (Tencent) refresh — POST /v2/plugin/auth/token/refresh with the
 // refresh token carried in the X-Refresh-Token header (not a form body),
 // matching the official CodeBuddy CLI. Response: { code: 0, data: <token> }.
-export async function refreshCodebuddyToken(refreshToken, log) {
+export async function refreshCodebuddyToken(refreshToken, log, proxyOptions = null) {
   if (!refreshToken) return null;
   return dedupRefresh("codebuddy-cn", refreshToken, async () => {
     const oauth = PROVIDER_OAUTH["codebuddy-cn"] || {};
-    const response = await fetch(oauth.refreshUrl, {
+    const response = await proxyAwareFetch(oauth.refreshUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -529,7 +519,7 @@ export async function refreshCodebuddyToken(refreshToken, log) {
         "X-Product": "SaaS",
       },
       body: "{}",
-    });
+    }, proxyOptions);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -563,11 +553,11 @@ export async function refreshCodebuddyToken(refreshToken, log) {
   }, log);
 }
 
-export async function refreshCodebuddyIntlToken(refreshToken, log) {
+export async function refreshCodebuddyIntlToken(refreshToken, log, proxyOptions = null) {
   if (!refreshToken) return null;
   return dedupRefresh("codebuddy-intl", refreshToken, async () => {
     const oauth = PROVIDER_OAUTH["codebuddy-intl"] || {};
-    const response = await fetch(oauth.refreshUrl, {
+    const response = await proxyAwareFetch(oauth.refreshUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -580,7 +570,7 @@ export async function refreshCodebuddyIntlToken(refreshToken, log) {
         "X-Product": "SaaS",
       },
       body: "{}",
-    });
+    }, proxyOptions);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -616,7 +606,7 @@ export async function refreshCodebuddyIntlToken(refreshToken, log) {
 
 // Trae refresh — POST ExchangeToken with JSON body {ClientID, RefreshToken, ClientSecret, UserID}.
 // Response: {Result: {AccessToken, RefreshToken, TokenType, ExpiresAt}}.
-export async function refreshTraeToken(refreshToken, credentials, log) {
+export async function refreshTraeToken(refreshToken, credentials, log, proxyOptions = null) {
   if (!refreshToken) return null;
   const oauth = PROVIDER_OAUTH.trae || {};
   const url = oauth.exchangeTokenUrl || oauth.tokenUrl;
@@ -627,7 +617,7 @@ export async function refreshTraeToken(refreshToken, credentials, log) {
 
   return dedupRefresh("trae", refreshToken, async () => {
     try {
-      const response = await fetch(url, {
+      const response = await proxyAwareFetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -640,7 +630,7 @@ export async function refreshTraeToken(refreshToken, credentials, log) {
           ClientSecret: oauth.clientSecret || "-",
           UserID: "",
         }),
-      });
+      }, proxyOptions);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -719,12 +709,12 @@ const MINIMAX_CODE_SITES = {
   "minimax-code-global": "https://account.minimax.io/oauth2/token",
 };
 
-export async function refreshMiniMaxCodeToken(provider, refreshToken, log) {
+export async function refreshMiniMaxCodeToken(provider, refreshToken, log, proxyOptions = null) {
   const tokenUrl = MINIMAX_CODE_SITES[provider];
   if (!tokenUrl || !refreshToken) return null;
   return dedupRefresh(provider, refreshToken, async () => {
     try {
-      const response = await fetch(tokenUrl, {
+      const request = {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
@@ -738,7 +728,8 @@ export async function refreshMiniMaxCodeToken(provider, refreshToken, log) {
           audience: "agent-backend",
         }).toString(),
         signal: AbortSignal.timeout(30000),
-      });
+      };
+      const response = await fetchWithOptionalProxy(tokenUrl, request, proxyOptions);
       const data = await response.json().catch(() => null);
       if (!response.ok || (data && typeof data.error === "string" && data.error)) {
         const code = data?.error || `HTTP ${response.status}`;
@@ -755,8 +746,6 @@ export async function refreshMiniMaxCodeToken(provider, refreshToken, log) {
       }
       return {
         accessToken: data.access_token,
-        // MiniMax rotates the refresh token on every refresh; keep the old one
-        // only if the answer oddly omits it.
         refreshToken: data.refresh_token || refreshToken,
         expiresIn: data.expires_in,
       };

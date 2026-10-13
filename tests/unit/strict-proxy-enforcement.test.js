@@ -18,9 +18,10 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/models", () => ({
   getProxyPoolById: vi.fn(),
 }));
-
+vi.mock("@/lib/localDb", () => ({ getSettings: vi.fn() }));
 const { getProxyPoolById } = await import("@/models");
-const { resolveConnectionProxyConfig } = await import("../../src/lib/network/connectionProxy.js");
+const { getSettings } = await import("@/lib/localDb");
+const { resolveConnectionProxyConfig, resolveProviderConnectionProxyConfig } = await import("../../src/lib/network/connectionProxy.js");
 const { proxyAwareFetch } = await import("../../open-sse/utils/proxyFetch.js");
 
 describe("strict pool keeps strictProxy when the pool is unusable (#4333)", () => {
@@ -51,6 +52,19 @@ describe("strict pool keeps strictProxy when the pool is unusable (#4333)", () =
   it("still reports strictProxy:false when no pool is assigned", async () => {
     const cfg = await resolveConnectionProxyConfig({});
     expect(cfg.strictProxy).toBe(false);
+  });
+});
+
+describe("provider local sidecar exclusion", () => {
+  it("disables the local sidecar only for the opted-out provider", async () => {
+    getProxyPoolById.mockResolvedValue({ id: "sidecar", isActive: true, proxyUrl: "http://127.0.0.1:20129", strictProxy: true });
+    getSettings.mockResolvedValue({ providerStrategies: { anthropic: { excludeLocalProxy: true } } });
+
+    const excluded = await resolveProviderConnectionProxyConfig("anthropic", { proxyPoolId: "sidecar" });
+    const included = await resolveProviderConnectionProxyConfig("openai", { proxyPoolId: "sidecar" });
+
+    expect(excluded).toMatchObject({ source: "excluded-local-sidecar", connectionProxyEnabled: false, connectionProxyUrl: "", strictProxy: false, bypassLocalProxy: true });
+    expect(included).toMatchObject({ connectionProxyEnabled: true, connectionProxyUrl: "http://127.0.0.1:20129", strictProxy: true, bypassLocalProxy: false });
   });
 });
 

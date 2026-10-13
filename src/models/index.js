@@ -46,4 +46,5 @@ export {
   createLocalProxyNode,
   updateLocalProxyNode,
   deleteLocalProxyNode,
+  deleteLocalProxyNodesByHealthStatus,
 } from "@/lib/localDb";

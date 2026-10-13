@@ -24,4 +24,5 @@ export {
   refreshProxySubscription,
   getLocalProxyNodes, getLocalProxyNodeById,
   createLocalProxyNode, updateLocalProxyNode, deleteLocalProxyNode,
+  deleteLocalProxyNodesByHealthStatus,
 } from "@/lib/db/index.js";

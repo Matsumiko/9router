@@ -4,7 +4,7 @@
  * Also triggered by 409/429 error handler to sync exact resetAt from upstream.
  */
 
-import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
+import { resolveProviderConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { getAntigravityUsage } from "open-sse/services/usage/google.js";
 import * as log from "../utils/logger.js";
 
@@ -211,12 +211,13 @@ export async function refreshAntigravityQuota(connectionId, accessToken, provide
 
 async function _doRefresh(connectionId, accessToken, providerSpecificData, now) {
   try {
-    const proxyCfg = await resolveConnectionProxyConfig(providerSpecificData || {});
+    const proxyCfg = await resolveProviderConnectionProxyConfig("antigravity", providerSpecificData || {});
     const proxyOptions = {
       connectionProxyEnabled: proxyCfg.connectionProxyEnabled === true,
       connectionProxyUrl: proxyCfg.connectionProxyUrl || "",
       connectionNoProxy: proxyCfg.connectionNoProxy || "",
       vercelRelayUrl: proxyCfg.vercelRelayUrl || "",
+      bypassLocalProxy: proxyCfg.bypassLocalProxy === true,
       strictProxy: proxyCfg.strictProxy === true,
     };
 

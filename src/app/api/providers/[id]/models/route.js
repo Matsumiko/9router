@@ -9,7 +9,8 @@ import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
 import { resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
-import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
+import { resolveProviderConnectionProxyConfig } from "@/lib/network/connectionProxy";
+import { proxyAwareFetch } from "open-sse/utils/proxyFetch.js";
 import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { resolveClineModels, resolveClinepassModels } from "open-sse/services/clinepassModels.js";
@@ -86,6 +87,19 @@ const getStaticProviderModels = (providerId) =>
   }));
 
 // Generic custom resolver for OAuth providers that need refresh-on-401 + token persist.
+const buildProviderProxyOptions = async (connection) => {
+  const proxy = await resolveProviderConnectionProxyConfig(connection.provider, connection.providerSpecificData || {});
+  return {
+    connectionProxyEnabled: proxy.connectionProxyEnabled === true,
+    connectionProxyUrl: proxy.connectionProxyUrl || "",
+    connectionNoProxy: proxy.connectionNoProxy || "",
+    vercelRelayUrl: proxy.vercelRelayUrl || "",
+    bypassLocalProxy: proxy.bypassLocalProxy === true,
+    strictProxy: proxy.strictProxy === true,
+  };
+};
+
+ // Generic custom resolver for OAuth providers that need refresh-on-401 + token persist.
 // Receives a `fetchFn(token)` and returns parsed models or throws.
 const buildOAuthResolver = ({ refreshFn, fetchFn, parseFn, errorLabel }) => async (connection) => {
   const { accessToken, refreshToken } = connection;
@@ -461,11 +475,14 @@ const PROVIDER_MODELS_CONFIG = {
   "qoder-cn": buildQoderModelsResolver("qoder-cn"),
   "gemini-cli": {
     customResolver: buildOAuthResolver({
-      refreshFn: (conn) => refreshGoogleToken(conn.refreshToken, GEMINI_CONFIG.clientId, GEMINI_CONFIG.clientSecret),
-      fetchFn: (token, conn) => {
+      refreshFn: async (conn) => {
+        const proxyOptions = await buildProviderProxyOptions(conn);
+        return refreshGoogleToken(conn.refreshToken, GEMINI_CONFIG.clientId, GEMINI_CONFIG.clientSecret, undefined, proxyOptions);
+      },
+      fetchFn: async (token, conn) => {
         const projectId = conn.projectId || conn.providerSpecificData?.projectId;
         const body = projectId ? { project: projectId } : {};
-        return fetch(GEMINI_CLI_MODELS_URL, {
+        return proxyAwareFetch(GEMINI_CLI_MODELS_URL, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -474,7 +491,7 @@ const PROVIDER_MODELS_CONFIG = {
             "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1"
           },
           body: JSON.stringify(body)
-        });
+        }, await buildProviderProxyOptions(conn));
       },
       parseFn: parseGeminiCliModels,
       errorLabel: "Failed to fetch Gemini CLI models"
@@ -482,7 +499,7 @@ const PROVIDER_MODELS_CONFIG = {
   },
   "grok-cli": {
     customResolver: async (connection) => {
-      const proxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});
+      const proxy = await resolveProviderConnectionProxyConfig(connection.provider, connection.providerSpecificData || {});
       const result = await resolveGrokCliModels({
         ...connection,
         connectionId: connection.id,
@@ -493,6 +510,7 @@ const PROVIDER_MODELS_CONFIG = {
           connectionProxyUrl: proxy.connectionProxyUrl || "",
           connectionNoProxy: proxy.connectionNoProxy || "",
           vercelRelayUrl: proxy.vercelRelayUrl || "",
+          bypassLocalProxy: proxy.bypassLocalProxy === true,
           strictProxy: proxy.strictProxy === true,
         },
         onCredentialsRefreshed: async (refreshed) => {

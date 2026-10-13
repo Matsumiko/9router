@@ -52,7 +52,7 @@ const DEFAULT_SETTINGS = {
   mitmRouterBaseUrl: DEFAULT_MITM_ROUTER_BASE,
   localProxyAutoTestEnabled: false,
   localProxyAutoTestIntervalMinutes: 15,
-  localProxyAutoTestUrl: "https://www.gstatic.com/generate_204",
+  localProxyAutoTestUrl: "http://cp.cloudflare.com/",
   localProxyAutoFailoverEnabled: false,
   localProxyRotationStrategy: "failover",
   localProxyRotationIntervalMinutes: 30,

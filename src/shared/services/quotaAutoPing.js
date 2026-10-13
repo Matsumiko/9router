@@ -7,7 +7,7 @@ import { getCodexUsage } from "open-sse/services/usage/codex.js";
 import { getExecutor } from "open-sse/executors/index.js";
 import { CLAUDE_CLI_SPOOF_HEADERS } from "open-sse/providers/shared.js";
 import { proxyAwareFetch } from "open-sse/utils/proxyFetch.js";
-import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
+import { resolveProviderConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { refreshAndUpdateCredentials } from "@/app/api/usage/[connectionId]/route.js";
 import { QUOTA_AUTOPING_CONFIG } from "@/shared/constants/config";
 
@@ -99,6 +99,7 @@ function buildProxyOptions(cfg) {
     connectionProxyUrl: cfg.connectionProxyUrl || "",
     connectionNoProxy: cfg.connectionNoProxy || "",
     vercelRelayUrl: cfg.vercelRelayUrl || "",
+    bypassLocalProxy: cfg.bypassLocalProxy === true,
     strictProxy: false,
   };
 }
@@ -195,7 +196,7 @@ async function pingConnection(conn, provider, providerConfig, handler, deps, sta
   // Avoid hammering provider auth/quota endpoints if a ping failed recently.
   if (shouldSkipAfterFailure(state, key)) return;
 
-  const proxyCfg = await deps.resolveConnectionProxyConfig(conn.providerSpecificData);
+  const proxyCfg = await deps.resolveProviderConnectionProxyConfig(provider, conn.providerSpecificData);
   const proxyOptions = buildProxyOptions(proxyCfg);
 
   let connection = conn;
@@ -251,7 +252,7 @@ function createDefaultDeps() {
     getSettings,
     getProviderConnections,
     updateProviderConnection,
-    resolveConnectionProxyConfig,
+    resolveProviderConnectionProxyConfig,
     refreshAndUpdateCredentials,
     proxyAwareFetch,
     getExecutor,

@@ -262,12 +262,20 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       return errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, lastError || "All accounts unavailable", lastHeaders);
     }
 
-    // Account selection shown in the unified "▶" line (acc:...)
-    const refreshedCredentials = await checkAndRefreshToken(provider, credentials);
+    const providerSpecificData = credentials.providerSpecificData || {};
+    const providerProxyConfig = {
+      connectionProxyEnabled: providerSpecificData.connectionProxyEnabled === true,
+      connectionProxyUrl: providerSpecificData.connectionProxyUrl || "",
+      connectionNoProxy: providerSpecificData.connectionNoProxy || "",
+      vercelRelayUrl: providerSpecificData.vercelRelayUrl || "",
+      bypassLocalProxy: providerSpecificData.bypassLocalProxy === true,
+      strictProxy: providerSpecificData.strictProxy === true,
+    };
+    const refreshedCredentials = await checkAndRefreshToken(provider, credentials, { proxyOptions: providerProxyConfig });
 
     // Ensure real project ID is available for providers that need it (P0 fix: cold miss)
     if ((provider === "antigravity" || provider === "gemini-cli") && !refreshedCredentials.projectId) {
-      const pid = await getProjectIdForConnection(credentials.connectionId, refreshedCredentials.accessToken, provider);
+      const pid = await getProjectIdForConnection(credentials.connectionId, refreshedCredentials.accessToken, provider, providerProxyConfig);
       if (pid) {
         refreshedCredentials.projectId = pid;
         // Persist to DB in background so subsequent requests have it immediately

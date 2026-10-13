@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { proxyAwareFetch } from "open-sse/utils/proxyFetch.js";
 
 const MAX_SUBSCRIPTION_BYTES = 2 * 1024 * 1024;
 const SUBSCRIPTION_FETCH_ATTEMPTS = 3;
@@ -156,7 +157,7 @@ export async function refreshProxySubscription(id) {
     let nodes = []; let lastError = null;
     for (let attempt = 1; attempt <= SUBSCRIPTION_FETCH_ATTEMPTS; attempt += 1) {
       try {
-        const response = await fetch(subscription.url, { headers: { "User-Agent": "9Router local proxy manager" }, signal: AbortSignal.timeout(15000), cache: "no-store" });
+        const response = await proxyAwareFetch(subscription.url, { headers: { "User-Agent": "9Router local proxy manager" }, signal: AbortSignal.timeout(15000), cache: "no-store" });
         if (!response.ok) {
           const error = new Error(`Subscription returned HTTP ${response.status}`);
           if (response.status < 500 || attempt === SUBSCRIPTION_FETCH_ATTEMPTS) throw error;
@@ -196,3 +197,12 @@ export async function createLocalProxyNode(input) {
 }
 export async function updateLocalProxyNode(id, updates) { const db = await getAdapter(); const current = await getLocalProxyNodeById(id); if (!current) return null; const next = { ...current, ...updates, updatedAt: now() }; db.run("UPDATE localProxyNodes SET name=?, server=?, port=?, enabled=?, healthStatus=?, latencyMs=?, lastCheckedAt=?, lastError=?, data=?, updatedAt=? WHERE id=?", [next.name, next.server, next.port, next.enabled ? 1 : 0, next.healthStatus, next.latencyMs || null, next.lastCheckedAt || null, next.lastError || null, stringifyJson(next), next.updatedAt, id]); return next; }
 export async function deleteLocalProxyNode(id) { const db = await getAdapter(); const node = await getLocalProxyNodeById(id); if (node) db.run("DELETE FROM localProxyNodes WHERE id=?", [id]); return node; }
+export async function deleteLocalProxyNodesByHealthStatus(healthStatus = "degraded", { subscriptionId } = {}) {
+  const db = await getAdapter();
+  const where = ["healthStatus = ?"];
+  const params = [healthStatus];
+  if (subscriptionId) { where.push("subscriptionId = ?"); params.push(subscriptionId); }
+  const rows = db.all(`SELECT * FROM localProxyNodes WHERE ${where.join(" AND ")}`, params).map(nodeRow);
+  if (rows.length) db.run(`DELETE FROM localProxyNodes WHERE ${where.join(" AND ")}`, params);
+  return rows;
+}

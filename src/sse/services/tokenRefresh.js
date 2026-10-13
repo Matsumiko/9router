@@ -26,40 +26,53 @@ import {
   refreshProviderCredentials as _refreshProviderCredentials,
   shouldRefreshCredentials as _shouldRefreshCredentials,
 } from "open-sse/services/oauthCredentialManager.js";
+import { resolveProviderConnectionProxyConfig } from "../../lib/network/connectionProxy.js";
 
 export const TOKEN_EXPIRY_BUFFER_MS = BUFFER_MS;
 
 // ─── Re-exports wrapped with local logger ─────────────────────────────────────
 
-export const refreshAccessToken = (provider, refreshToken, credentials) =>
-  _refreshAccessToken(provider, refreshToken, credentials, log);
+export const refreshAccessToken = (provider, refreshToken, credentials, logOrProxyOptions = log, proxyOptions = null) =>
+  _refreshAccessToken(
+    provider,
+    refreshToken,
+    credentials,
+    logOrProxyOptions && typeof logOrProxyOptions === "object" && ("info" in logOrProxyOptions || "error" in logOrProxyOptions || "warn" in logOrProxyOptions) ? logOrProxyOptions : log,
+    proxyOptions || (logOrProxyOptions && !("info" in Object(logOrProxyOptions)) ? logOrProxyOptions : null),
+  );
 
-export const refreshClaudeOAuthToken = (refreshToken) =>
-  _refreshClaudeOAuthToken(refreshToken, log);
+export const refreshClaudeOAuthToken = (refreshToken, proxyOptions = null) =>
+  _refreshClaudeOAuthToken(refreshToken, log, proxyOptions);
 
-export const refreshGoogleToken = (refreshToken, clientId, clientSecret) =>
-  _refreshGoogleToken(refreshToken, clientId, clientSecret, log);
+export const refreshGoogleToken = (refreshToken, clientId, clientSecret, logOrProxyOptions = log, proxyOptions = null) =>
+  _refreshGoogleToken(
+    refreshToken,
+    clientId,
+    clientSecret,
+    logOrProxyOptions && typeof logOrProxyOptions === "object" && ("info" in logOrProxyOptions || "error" in logOrProxyOptions || "warn" in logOrProxyOptions) ? logOrProxyOptions : log,
+    proxyOptions || (logOrProxyOptions && !("info" in Object(logOrProxyOptions)) ? logOrProxyOptions : null),
+  );
 
-export const refreshCodexToken = (refreshToken) =>
-  _refreshCodexToken(refreshToken, log);
+export const refreshCodexToken = (refreshToken, proxyOptions = null) =>
+  _refreshCodexToken(refreshToken, log, proxyOptions);
 
-export const refreshIflowToken = (refreshToken) =>
-  _refreshIflowToken(refreshToken, log);
+export const refreshIflowToken = (refreshToken, proxyOptions = null) =>
+  _refreshIflowToken(refreshToken, log, proxyOptions);
 
-export const refreshGitHubToken = (refreshToken) =>
-  _refreshGitHubToken(refreshToken, log);
+export const refreshGitHubToken = (refreshToken, proxyOptions = null) =>
+  _refreshGitHubToken(refreshToken, log, proxyOptions);
 
-export const refreshCopilotToken = (githubAccessToken) =>
-  _refreshCopilotToken(githubAccessToken, log);
+export const refreshCopilotToken = (githubAccessToken, proxyOptions = null) =>
+  _refreshCopilotToken(githubAccessToken, log, proxyOptions);
 
-export const refreshKiroToken = (refreshToken, providerSpecificData) =>
-  _refreshKiroToken(refreshToken, providerSpecificData, log);
+export const refreshKiroToken = (refreshToken, providerSpecificData, proxyOptions = null) =>
+  _refreshKiroToken(refreshToken, providerSpecificData, log, proxyOptions);
 
 export const getAccessToken = (provider, credentials) =>
   _getAccessToken(provider, credentials, log);
 
-export const refreshTokenByProvider = (provider, credentials) =>
-  _refreshTokenByProvider(provider, credentials, log);
+export const refreshTokenByProvider = (provider, credentials, proxyOptions = null) =>
+  _refreshTokenByProvider(provider, credentials, log, proxyOptions);
 
 export const formatProviderCredentials = (provider, credentials) =>
   _formatProviderCredentials(provider, credentials, log);
@@ -121,7 +134,7 @@ function needsProjectId(provider) {
  * @param {string} connectionId
  * @param {string} accessToken
  */
-function _refreshProjectId(provider, connectionId, accessToken) {
+function _refreshProjectId(provider, connectionId, accessToken, proxyOptions = null) {
   if (!needsProjectId(provider) || !connectionId || !accessToken) return;
 
   // Invalidate the stale cached entry so getProjectIdForConnection does a real fetch
@@ -131,7 +144,7 @@ function _refreshProjectId(provider, connectionId, accessToken) {
   // Eagerly fetching projectId across multiple accounts simultaneously triggers Google Cloud anti-abuse / rate limits.
   // Runtime handlers (e.g. chat handler) will lazily call getProjectIdForConnection() on demand.
   if (process.env.EAGER_PROJECT_ID_REFRESH === "true") {
-    getProjectIdForConnection(connectionId, accessToken, provider)
+    getProjectIdForConnection(connectionId, accessToken, provider, proxyOptions)
       .then((projectId) => {
         if (!projectId) return;
         updateProviderCredentials(connectionId, { projectId }).catch((err) => {
@@ -261,7 +274,16 @@ export async function checkAndRefreshToken(provider, credentials, options = {}) 
       lastRefreshAt: creds.lastRefreshAt || null,
     });
 
-    const newCreds = await _refreshProviderCredentials(provider, creds, log);
+    const proxyCfg = await resolveProviderConnectionProxyConfig(provider, creds.providerSpecificData || {});
+    const proxyOptions = {
+      connectionProxyEnabled: proxyCfg.connectionProxyEnabled === true,
+      connectionProxyUrl: proxyCfg.connectionProxyUrl || "",
+      connectionNoProxy: proxyCfg.connectionNoProxy || "",
+      vercelRelayUrl: proxyCfg.vercelRelayUrl || "",
+      bypassLocalProxy: proxyCfg.bypassLocalProxy === true,
+      strictProxy: proxyCfg.strictProxy === true,
+    };
+    const newCreds = await _refreshProviderCredentials(provider, creds, log, proxyOptions);
     if (newCreds?.accessToken || newCreds?.apiKey || newCreds?.copilotToken) {
       const mergedCreds = {
         ...newCreds,
@@ -283,7 +305,7 @@ export async function checkAndRefreshToken(provider, credentials, options = {}) 
       };
 
       // Non-blocking: refresh projectId with the new access token
-      _refreshProjectId(provider, creds.connectionId, creds.accessToken);
+      _refreshProjectId(provider, creds.connectionId, creds.accessToken, proxyOptions);
     }
   }
 
@@ -302,7 +324,7 @@ export async function checkAndRefreshToken(provider, credentials, options = {}) 
         expiresIn: copilotToken ? Math.round(remaining / 1000) : "missing",
       });
 
-      const copilotTokenResult = await refreshCopilotToken(creds.accessToken);
+      const copilotTokenResult = await refreshCopilotToken(creds.accessToken, proxyOptions);
       if (copilotTokenResult) {
         const updatedSpecific = {
           ...creds.providerSpecificData,

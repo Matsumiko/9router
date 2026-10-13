@@ -1,4 +1,5 @@
 import { getProxyPoolById } from "@/models";
+import { getSettings } from "@/lib/localDb";
 
 // Safely normalize any value into a trimmed string.
 function normalizeString(value) {
@@ -55,6 +56,39 @@ function normalizeLegacyProxy(providerSpecificData = {}) {
   };
 }
 
+async function shouldExcludeLocalSidecar(providerId) {
+  if (!providerId) return false;
+  const settings = await getSettings();
+  return settings.providerStrategies?.[providerId]?.excludeLocalProxy === true;
+}
+
+function isLocalSidecarUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    const port = String(process.env.NINE_ROUTER_LOCAL_PROXY_PORT || "20129");
+    return parsed.protocol === "http:" && parsed.hostname === "127.0.0.1" && parsed.port === port;
+  } catch {
+    return false;
+  }
+}
+
+export async function resolveProviderConnectionProxyConfig(providerId, providerSpecificData = {}) {
+  const config = await resolveConnectionProxyConfig(providerSpecificData);
+  const bypassLocalProxy = await shouldExcludeLocalSidecar(providerId);
+  if (bypassLocalProxy && isLocalSidecarUrl(config.connectionProxyUrl)) {
+    return {
+      ...config,
+      source: "excluded-local-sidecar",
+      connectionProxyEnabled: false,
+      connectionProxyUrl: "",
+      connectionNoProxy: "",
+      strictProxy: false,
+      vercelRelayUrl: "",
+      bypassLocalProxy: true,
+    };
+  }
+  return { ...config, bypassLocalProxy };
+}
 /**
  * Resolve final proxy configuration.
  *

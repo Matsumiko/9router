@@ -36,6 +36,7 @@ export {
   refreshProxySubscription,
   getLocalProxyNodes, getLocalProxyNodeById,
   createLocalProxyNode, updateLocalProxyNode, deleteLocalProxyNode,
+  deleteLocalProxyNodesByHealthStatus,
 } from "./repos/proxySubscriptionsRepo.js";
 
 // API keys

@@ -15,7 +15,7 @@ vi.mock("@/lib/localDb", () => ({
   updateProviderConnection: vi.fn(),
 }));
 vi.mock("@/lib/network/connectionProxy", () => ({
-  resolveConnectionProxyConfig: mocks.resolveConnectionProxyConfig,
+  resolveProviderConnectionProxyConfig: mocks.resolveConnectionProxyConfig,
   pickProxyPoolId: vi.fn(),
 }));
 vi.mock("@/shared/constants/providers.js", () => ({

@@ -228,6 +228,7 @@ function instrumentResponseBody(response, targetUrl, proxyUrl) {
   });
 }
 const MITM_BYPASS_HOSTS = [
+  "oauth2.googleapis.com",
   "cloudcode-pa.googleapis.com",
   "daily-cloudcode-pa.googleapis.com",
   "api.individual.githubcopilot.com",
@@ -521,7 +522,10 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
   }
 
   const connectionProxyUrl = resolveConnectionProxyUrl(targetUrl, proxyOptions);
-  const envProxyUrl = connectionProxyUrl ? null : normalizeProxyUrl(getEnvProxyUrl(targetUrl));
+  const envProxyCandidate = normalizeProxyUrl(getEnvProxyUrl(targetUrl));
+  const envProxyUrl = connectionProxyUrl
+    ? null
+    : (proxyOptions?.bypassLocalProxy && isLocalSidecarProxy(envProxyCandidate) ? null : envProxyCandidate);
   const proxyUrl = connectionProxyUrl || envProxyUrl;
 
   // MITM DNS bypass: for known MITM-intercepted hosts, resolve real IP to avoid DNS spoof

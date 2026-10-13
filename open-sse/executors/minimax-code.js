@@ -50,8 +50,10 @@ export class MinimaxCodeExecutor extends DefaultExecutor {
   // Route the on-401 refresh through REFRESH_HANDLERS' handler (single-use
   // refresh tokens, deduped by token value) instead of the generic grant
   // builder — the default path would re-send a spent refresh token.
-  async refreshCredentials(credentials, log) {
+  async refreshCredentials(credentials, log, proxyOptions = null) {
     if (!credentials?.refreshToken) return null;
-    return refreshMiniMaxCodeToken(this.provider, credentials.refreshToken, log);
+    return proxyOptions
+      ? refreshMiniMaxCodeToken(this.provider, credentials.refreshToken, log, proxyOptions)
+      : refreshMiniMaxCodeToken(this.provider, credentials.refreshToken, log);
   }
 }
